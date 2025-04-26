@@ -17,6 +17,7 @@ struct pcf_time
 {
     uint8_t seconds;
     uint8_t minutes;
+	uint8_t hours;
 };
 
 /* Функция инициализации часов реального времени PCF8583 */
