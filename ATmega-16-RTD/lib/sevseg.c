@@ -1,8 +1,8 @@
 #include <avr/pgmspace.h>
 #include "sevseg.h"
 
-#define DATA_PORT PORTC  // Порт данных к которому подключены
-#define DATA_DDR  DDRC   // семисегментные индикаторы.
+#define DATA_PORT	PORTA  // Порт данных к которому подключены
+#define DATA_DDR    DDRA   // семисегментные индикаторы.
 
 #define CTRL_PORT PORTB  // Управляющий порт к которому подключены общие
 #define CTRL_DDR  DDRB   // катоды/аноды семисегментных индикаторов
@@ -16,6 +16,7 @@
 					   
 static uint8_t dot_pos  = 0xFF; /* по умолчанию точка выключена          */
 static uint8_t blank_leading = 0; /* гасить ли ведущие нули                */
+#define SEVSEG_MINUS_CODE  0b00000010 
 
 void sevseg_set_dot(uint8_t position)      { dot_pos = position; }
 void sevseg_blank_leading(uint8_t on)      { blank_leading = on; }					   
@@ -118,11 +119,19 @@ static void display_digit(const uint8_t *digits, uint8_t num_dig)
 		}
 	}
 
-	uint8_t seg = pgm_read_byte(&dec2sevseg[d]);
-	if(num_dig == dot_pos) seg |= 0x01;              /* DP = младший бит */
+    uint8_t seg;
+    if (d <= 9) {                          /* цифра */
+	    seg = pgm_read_byte(&dec2sevseg[d]);
+	    } else if (d == 0x0A) {                /* «минус» */
+	    seg = SEVSEG_MINUS_CODE;
+	    } else {                               /* пусто */
+	    return;
+    }
 
-	DATA_PORT = seg;
-	CTRL_PORT |= pgm_read_byte(&ctrl_pins[num_dig]);
+    if (num_dig == dot_pos) seg |= 0x01;   /* точка */
+
+    DATA_PORT = seg;
+    CTRL_PORT |= pgm_read_byte(&ctrl_pins[num_dig]);
 }
 
 /**
