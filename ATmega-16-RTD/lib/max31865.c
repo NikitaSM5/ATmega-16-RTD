@@ -1,154 +1,98 @@
-/*
- * max31865.c
- *
- * Created: 13.9.2019 12:34:48
- * Author : strakos.p
- */ 
-
-// Includes
 #include "max31865.h"
+#include "spi.h"
 
-// Constant macro
-#define DDR(x) (*(&x - 1))   // address of data direction register of port x
-#if defined(__AVR_ATmega64__) || defined(__AVR_ATmega128__)
-/* on ATmega64/128 PINF is on port 0x00 and not 0x60 */
-#define PIN(x) ( &PORTF==&(x) ? _SFR_IO8(0x00) : (*(&x - 2)) )
-#else
-#define PIN(x) (*(&x - 2))  // address of input register of port x
-#endif
+static inline void cs_low(void)  { MAX31865_CS_PORT &= ~(1<<MAX31865_CS_PIN); }
+static inline void cs_high(void) { MAX31865_CS_PORT |=  (1<<MAX31865_CS_PIN); }
 
-// Reading data from SPI
-char max_spi_read(char addr){
-	
-	CS_PORT &= ~_BV(CS_PIN);	// CS_LOW - activate slave
-	
-	SPDR = addr;				// register address to read
-	while(!(SPSR & (1<<SPIF)));	// wait for complete sending
-
-	SPDR = 0xFF;				// dummy data to provide SPI clock signals to read
-	while(!(SPSR & (1<<SPIF)));	// wait for complete sending
-	
-	CS_PORT |= _BV(CS_PIN);		// CS_HIGH - deactivate slave
-	return SPDR;				// delete flag SPIF and return data
-}
-
-// Writing data to SPI
-void max_spi_write(char addr, char data){
-	
-	CS_PORT &= ~_BV(CS_PIN);	// CS_LOW - activate slave
-	
-	SPDR = addr;				// register address to write
-	while(!(SPSR & (1<<SPIF)));	// wait for complete sending
-	
-	SPDR = data;				// data to write
-	while(!(SPSR & (1<<SPIF)));	// wait for complete sending
-	
-	CS_PORT |= _BV(CS_PIN);		// CS_HIGH - deactivate slave
-}
-
-// Port initialization
-void max_init_port(void)
+static void write_reg(uint8_t addr, uint8_t val)
 {
-	// SPI setting
-	/* Enable SPI, Master, set mode 3, set clock rate fck/128 */
-	SPCR =
-	(0 << SPIE) |
-	(1 << SPE)  |	// SPI enabled
-	(0 << DORD) |
-	(1 << MSTR) |	// Master
-	(1 << CPOL) |	// Clock polarity
-	(1 << CPHA) |	// Clock phase
-	(1 << SPR1) |
-	(1 << SPR0);	// Clock F_CPU/128
-
-	// output DDRs
-	DDR(CS_PORT) |= _BV(CS_PIN);
-	DDR(MOSI_PORT) |= _BV(MOSI_PIN);
-	DDR(SCK_PORT) |= _BV(SCK_PIN);
-	
-	// set outputs
-	CS_PORT |= _BV(CS_PIN);	// CS HIGH, slave disabled
-	
-	// input DDRs
-	DDR(DRDY_PORT) &= ~_BV(DRDY_PIN);
-	DDR(MISO_PORT) &= ~_BV(MISO_PIN);
+	cs_low();
+	spi_transfer(addr | 0x80);   /* write flag */
+	spi_transfer(val);
+	cs_high();
 }
 
-// Initializes communication with max
-uint8_t init_max(void)
+static uint8_t read_reg(uint8_t addr)
 {
-	/*
-		If communication is done properly function returns 1, otherwise returns 0
-	*/
-	
-	uint8_t conf = 0;
-	
-	max_spi_write(CONFIGURATION, 0b10000000);	// Enable V bias
-	conf = max_spi_read(READ_CONFIGURATION);	// Reading Configuration register to verify communication
-	
-	if(conf == 0b10000000)
-	{
-		max_spi_write(WRITE_HIGH_FAULT_TRESHOLD_MSB, 0xFF);	// Writing High Fault Threshold MSB
-		max_spi_write(WRITE_HIGH_FAULT_TRESHOLD_LSB, 0xFF);	// Writing High Fault Threshold LSB
-		max_spi_write(WRITE_LOW_FAULT_TRESHOLD_MSB, 0x00);		// Writing Low Fault Threshold MSB
-		max_spi_write(WRITE_LOW_FAULT_TRESHOLD_LSB, 0x00);		// Writing Low Fault Threshold LSB
-		
-		return 1;
+	cs_low();
+	spi_transfer(addr & 0x7F);
+	uint8_t v = spi_transfer(0xFF);
+	cs_high();
+	return v;
+}
+
+/* Read 16‑bit register (RTD value, thresholds). */
+static uint16_t read_reg16(uint8_t addr)
+{
+	cs_low();
+	spi_transfer(addr & 0x7F);
+	uint8_t msb = spi_transfer(0xFF);
+	uint8_t lsb = spi_transfer(0xFF);
+	cs_high();
+	return ((uint16_t)msb << 8) | lsb;
+}
+
+void max31865_init(uint8_t three_wire, uint8_t filter50Hz)
+{
+	/* Configure CS pin */
+	MAX31865_CS_DDR |= (1<<MAX31865_CS_PIN);
+	cs_high();
+
+	spi_init(); /* in spi.c */
+
+	uint8_t cfg = 0;
+	if (three_wire) cfg |= MAX31865_CFG_3WIRE;
+	if (filter50Hz) cfg |= MAX31865_CFG_FILT50HZ;
+
+	write_reg(MAX31865_REG_CONFIG, cfg | MAX31865_CFG_BIAS); /* Enable bias */
+	_delay_ms(10);
+	/* Start automatic conversions */
+	write_reg(MAX31865_REG_CONFIG, cfg | MAX31865_CFG_BIAS | MAX31865_CFG_MODE_AUTO);
+}
+
+uint16_t max31865_read_raw(void)
+{
+	uint16_t v = read_reg16(MAX31865_REG_RTD_MSB);
+	return v & 0x7FFF; /* D0 is fault flag */
+}
+
+float max31865_read_temperature(void)
+{
+	uint16_t raw = max31865_read_raw();
+	float Rt = (float)raw * MAX31865_RREF / 32768.0f;
+
+	/* Callendar‑Van Dusen, simplify for >=0 °C */
+	float Z = Rt / MAX31865_R0;
+	float temp;
+
+	if (Rt >= MAX31865_R0) {
+		/* quadratic formula */
+		float d = (MAX31865_A*MAX31865_A) - (4*MAX31865_B*(1-Z));
+		temp = (-MAX31865_A + sqrtf(d)) / (2*MAX31865_B);
+		} else {
+		/* Use full equation with C term for <0 °C */
+		/* Solve iteratively (Newton) */
+		temp = -50.0f; /* initial */
+		for (uint8_t i=0;i<6;i++) {
+			float f = MAX31865_R0*(1 + MAX31865_A*temp + MAX31865_B*temp*temp + MAX31865_C*(temp-100)*temp*temp*temp) - Rt;
+			float df = MAX31865_R0*(MAX31865_A + 2*MAX31865_B*temp + 3*MAX31865_C*temp*temp - 200*MAX31865_C*temp);
+			temp -= f/df;
+		}
 	}
-	else
-	{
-		return 0;
-	}
+	return temp;
 }
 
-// Fault test
-uint8_t max_fault_test(void)
+uint8_t max31865_read_fault(void)
 {
-	/*
-		Returns 0 if there is not fault detected
-	*/
-	
-	uint8_t  lsb_rtd;
-	
-	lsb_rtd = max_spi_read(READ_RTD_LSB);
-	
-	return lsb_rtd&0x01;	
+	return read_reg(MAX31865_REG_FAULT_STATUS);
 }
 
-// Reading data from max
-long max_get_data(char datatype)
+void max31865_clear_fault(void)
 {
-	/*
-		Parameter datatype is for choose between temperature and RTD as return value, type:
-		'r' for RTD
-		't' for temperature.
-		
-		In normal operation function returns RTD or temperature multiplexed by 10
-		If new conversion result is not available - DRDY is high, returns 1000
-	*/
-	
-	uint8_t lsb_rtd, msb_rtd;
-	uint8_t DRDY_state;
-	
-	int RTD;
-	long temperature;
-
-	DRDY_state = DRDY_PORT&(1 << DRDY_PIN);
-
-	if (DRDY_state == 0)
-	{
-		lsb_rtd = max_spi_read(READ_RTD_LSB);
-		msb_rtd = max_spi_read(READ_RTD_MSB);
-			
-		RTD = ((msb_rtd << 7)+((lsb_rtd & 0xFE) >> 1));
-		if (datatype == 'r') return RTD;
-			
-		// Basic temperature calculation, the accuracy for temperatures 
-		// between -75°C - 100°C is max +-1.5°C
-		temperature = ( (long)10*RTD >> 5) - 2560;	// RTD / 32 - 256
-		if (datatype == 't') return temperature;
-	}
-	// return 1000 if not conversion available
-	else return 1000;
+	uint8_t cfg = read_reg(MAX31865_REG_CONFIG);
+	cfg &= ~MAX31865_CFG_MODE_AUTO; /* halt conv */
+	write_reg(MAX31865_REG_CONFIG, cfg | MAX31865_CFG_CLEAR_FAULT);
+	/* restart */
+	write_reg(MAX31865_REG_CONFIG, cfg | MAX31865_CFG_BIAS | MAX31865_CFG_MODE_AUTO);
 }
-
+//asd

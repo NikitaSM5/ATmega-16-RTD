@@ -12,28 +12,33 @@
 #include <util/delay.h>
 
 
-volatile long temp = 0;
+
+uint16_t temp = 0;
 
 int main(void)
 {
 	TIMSK |= (1 << TOIE0);
 	TCCR0 = (1 << CS01) | (1 << CS00);
-	sei();
+	
 	sevseg_init();
-	max_init_port(); 
-	if (!init_max())
+	max31865_init(0,0);
+	sei();
+	
+	while (1)
 	{
-		while (1)
-		{
-			sevseg_off();
-		}
+		float tc = max31865_read_temperature();
+		temp = tc - 7265;
+		_delay_ms(1000);
 	}
 	
 	
-    while (1) 
-    {
-		 temp = max_get_data('t');
-		 _delay_ms(100);
-    }
+}
+
+ISR(TIMER0_OVF_vect)
+{
+	uint8_t digits[4];
+	uint16_t v = (uint16_t)(temp);
+	sevseg_bin2bcd(v, digits);
+	sevseg_display_process(digits);
 }
 
