@@ -13,6 +13,12 @@
 
 #define CTRL_PIN_MASK ((1 << CTRL_PIN3) | (1 << CTRL_PIN2) | \
                        (1 << CTRL_PIN1) | (1 << CTRL_PIN0))
+					   
+static uint8_t dot_pos  = 0xFF; /* по умолчанию точка выключена          */
+static uint8_t blank_leading = 0; /* гасить ли ведущие нули                */
+
+void sevseg_set_dot(uint8_t position)      { dot_pos = position; }
+void sevseg_blank_leading(uint8_t on)      { blank_leading = on; }					   
 
 const uint8_t ctrl_pins[4] PROGMEM = {
     (1 << CTRL_PIN0),
@@ -98,15 +104,25 @@ static uint8_t inc_number_digit(void)
  */
 static void display_digit(const uint8_t *digits, uint8_t num_dig)
 {
-    /* Выключение отображения на семисегментных индикаторах */
-    DATA_PORT = 0x00;
-    CTRL_PORT &= ~CTRL_PIN_MASK;
+	DATA_PORT = 0x00;
+	CTRL_PORT &= ~CTRL_PIN_MASK;
 
-    /* Включение индикатора и вывод соответствующего символа */
-    CTRL_PORT |= pgm_read_byte(&ctrl_pins[num_dig]);
-    uint8_t digit = digits[num_dig];
-    uint8_t symbol = pgm_read_byte(&dec2sevseg[digit]);
-    DATA_PORT = symbol;
+	uint8_t d = digits[num_dig];
+
+	/* гасим лидирующие нули, кроме младшего разряда */
+	if(blank_leading && num_dig > 0){
+		uint8_t higher_nonzero = 0;
+		for(uint8_t i=3;i>num_dig;--i) if(digits[i]) higher_nonzero = 1;
+		if(!higher_nonzero && d==0){                 /* просто не включаем индикатор */
+			return;
+		}
+	}
+
+	uint8_t seg = pgm_read_byte(&dec2sevseg[d]);
+	if(num_dig == dot_pos) seg |= 0x01;              /* DP = младший бит */
+
+	DATA_PORT = seg;
+	CTRL_PORT |= pgm_read_byte(&ctrl_pins[num_dig]);
 }
 
 /**

@@ -53,7 +53,7 @@ void max31865_init(uint8_t three_wire, uint8_t filter50Hz)
 uint16_t max31865_read_raw(void)
 {
 	uint16_t v = read_reg16(MAX31865_REG_RTD_MSB);
-	return v & 0x7FFF; /* D0 is fault flag */
+	return (v >> 1) & 0x7FFF;
 }
 
 float max31865_read_temperature(void)
