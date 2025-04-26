@@ -3,6 +3,8 @@
 #include "main.h"
 #include "twi.h"
 #include "pcf8583.h"
+#include "sdcard.h"
+#define F_CPU 8000000UL
 #include <util/delay.h>
 #include <util/atomic.h>
 #include <math.h>
@@ -10,7 +12,7 @@
 #include <avr/io.h>
 #include <lcd16x2.h>
 
-#define F_CPU 8000000UL
+
 #define BTN_MASK (1<<PC3)
 #define LED_MASK (1<<PD7)
 
@@ -104,7 +106,8 @@ int main(void)
 	lcd_init();             
 	max31865_init(0, 0);
 	
-           
+
+	
 	lcd_disp_str((uint8_t *)"Time:");     
 
 	DDRB |= (1 << PB4);
@@ -115,13 +118,31 @@ int main(void)
 	PORTC |= BTN_MASK;
 	sei();
 	
+	char line[32];
+	float temp = max31865_read_temperature();
+
+	uint8_t cnt = 0;
+	
 	while (1) {
 		print_time();
+		temp = max31865_read_temperature();
+		cnt++;
+		
+		if(cnt == 10){
+		cnt = 0;
+		int16_t t10 = (int16_t)(temp * 10.0f + (temp>=0 ? 0.5f : -0.5f));
+		sprintf(line,"%02u:%02u,%d.%01u\r\n",
+		bcd2dec(t.hours), bcd2dec(t.minutes),
+		t10/10, (uint16_t)abs(t10)%10);
+		sd_write_line(line);
+		}
+		
 		if (!(PINC & BTN_MASK)) {
 			time_to_digits_mmss();
-			} else {
-			float temp_c = max31865_read_temperature();
-			temperature_to_digits_tenth(temp_c);
+			} 
+			else 
+			{
+			temperature_to_digits_tenth(temp);
 		}
 		
 		_delay_ms(500);
