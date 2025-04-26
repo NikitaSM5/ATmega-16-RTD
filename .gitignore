@@ -1,0 +1,5 @@
+*.pdsbak
+*.vs
+*.Debug
+*.cproj
+*.xml
