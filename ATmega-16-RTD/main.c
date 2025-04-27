@@ -205,13 +205,14 @@ ISR(TIMER0_OVF_vect)
 		}
 	} else flags.btn_fwd = 0;
 	
-	if((PINC & (1 << BTN_BWD)) == 0) {
-		if(flags.btn_bwd == 0){
+	if ((PINC & (1 << BTN_BWD)) == 0) {
+		if (!flags.btn_bwd) {
 			flags.btn_bwd = 1;
-			 if (sd_read_line(-1, logbuf, sizeof(logbuf))==0) {
-				 lcd_mov_cursor(16);
-				 lcd_disp_buf((uint8_t*)logbuf, strlen(logbuf));
-			 }
+			sd_iter_reset();                                 /* курсор = 0 */
+			if (sd_read_line(+1, logbuf, sizeof logbuf) == 0) {
+				lcd_mov_cursor(16);
+				lcd_disp_buf((uint8_t *)logbuf, strlen(logbuf));
+			}
 		}
 	} else flags.btn_bwd = 0;
 }
