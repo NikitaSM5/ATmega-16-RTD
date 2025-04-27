@@ -6,8 +6,78 @@
 static inline void sd_select  (void){ SD_CS_PORT &= ~(1<<SD_CS_PIN); }
 static inline void sd_deselect(void){ SD_CS_PORT |=  (1<<SD_CS_PIN); }
 
+static uint32_t it_sector;      /* где сейчас Ђкурсорї            */
+static uint16_t it_off;
+static uint32_t it_index;       /* номер строки (1ЕN)             */
+static uint32_t cur_sector = 1;     /* сектор 1 Ц свободен после MBR   */
+static uint16_t cur_off    = 0;     /* смещение внутри сектора         */
+static uint8_t  sec_buf[512];
+
+
 /* ==== ¬спомогательные функции ======================================= */
 static uint8_t spi_x(uint8_t v){ return spi_transfer(v); }
+
+
+static uint8_t read_sector(uint32_t lba)
+{
+	if(sd_cmd(17,lba,0xFF)) return 1;
+	/* ждЄм токен 0xFE */
+	while(spi_x(0xFF)==0xFF);
+	for(uint16_t i=0;i<512;i++) sec_buf[i]=spi_x(0xFF);
+	spi_x(0xFF); spi_x(0xFF);         /* CRC */
+	sd_deselect(); spi_x(0xFF);
+	return 0;
+}
+
+void sd_iter_reset(void)
+{
+	it_sector = 1;
+	it_off    = 0;
+	it_index  = 1;
+	read_sector(it_sector);           // <<< добавьте
+}
+
+static uint8_t get_char(uint8_t *ch)      /* 1-байтовое чтение */
+{
+    if (it_off == 512) {                   /* сектор закончилс€ Ц вперЄд   */
+        if (read_sector(++it_sector))  return 1;
+        it_off = 0;
+    }
+    *ch = sec_buf[it_off++];
+    return 0;
+}
+
+/* dir = +1 Ц следующа€ строка, dir = -1 Ц предыдуща€ (примитивно)   */
+uint8_t sd_read_line(int8_t dir, char *dst, uint8_t dst_sz)
+{
+    if (dir > 0) {                          /* ==> вперЄд =================*/
+        uint8_t c; uint8_t n = 0;
+        while (!get_char(&c) && c!=0xFF) {  /* 0xFF Ц Ђпустойї сектор      */
+            if (c=='\n') { dst[n]=0; it_index++; return 0; }
+            if (c!='\r' && n<dst_sz-1) dst[n++]=c;
+        }
+        return 2;                           /* достигли конца журнала      */
+    }
+    else {                                  /* <== назад  (упрощЄнно) =====*/
+        if (it_off<2 && it_sector==1) return 3;  /* уже самое начало      */
+        /* шаг назад на 2 символа ( \r\n ) и ищем предыдущий \n          */
+        if (it_off<2) {                     /* перейти в пред. сектор      */
+            if (read_sector(--it_sector)) return 1;
+            it_off = 512;
+        }
+        it_off -= 2;                        /* теперь мы перед \r\n        */
+        while (1) {
+            if (it_off==0) {
+                if (it_sector==1) break;
+                if (read_sector(--it_sector)) return 1;
+                it_off = 512;
+            }
+            if (sec_buf[--it_off]=='\n') { it_off++; break; }
+        }
+        it_index--;
+        return sd_read_line(+1,dst,dst_sz); /* вз€ть строку ЂвперЄдї       */
+    }
+}
 
 static uint8_t wait_ready(uint16_t tout_ms)
 {
@@ -66,20 +136,6 @@ void sd_init(void)
  * “екущий сектор в RAM не держим, а читаем-правим-записываем (медленно, но
  * логируем всего раз в час). */
 
-static uint32_t cur_sector = 1;     /* сектор 1 Ц свободен после MBR   */
-static uint16_t cur_off    = 0;     /* смещение внутри сектора         */
-static uint8_t  sec_buf[512];
-
-static uint8_t read_sector(uint32_t lba)
-{
-    if(sd_cmd(17,lba,0xFF)) return 1;
-    /* ждЄм токен 0xFE */
-    while(spi_x(0xFF)==0xFF);
-    for(uint16_t i=0;i<512;i++) sec_buf[i]=spi_x(0xFF);
-    spi_x(0xFF); spi_x(0xFF);         /* CRC */
-    sd_deselect(); spi_x(0xFF);
-    return 0;
-}
 
 static uint8_t write_sector(uint32_t lba)
 {

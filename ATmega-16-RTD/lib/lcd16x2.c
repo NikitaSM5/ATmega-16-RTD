@@ -1,3 +1,4 @@
+
 #define F_CPU 8000000UL
 #include <util/delay.h>
 
@@ -117,7 +118,8 @@ void lcd_init(void)
      */
 
     /* Подтверждение 4-битного интерфейса */
-    lcd_send_cmd(1 << LCD_F);
+    lcd_send_cmd((1 << LCD_F) | (1 << LCD_F_N));
+	
 
     /* Очистка дисплея, дисплей очищается не менее 1.5 мс */
     lcd_send_cmd(1 << LCD_CLR);
@@ -152,6 +154,7 @@ void lcd_disp_buf(uint8_t *buf, uint8_t size)
  */
 void lcd_disp_str(uint8_t *str)
 {
+
     do
     {
         lcd_send_char(*str);
@@ -170,12 +173,13 @@ void lcd_mov_cursor(uint8_t new_pos)
 	    uint8_t addr;
 
 	    // new_pos от 0 до 31 (0-15 первая строка, 16-31 вторая)
-	    if (new_pos < 16)
+	    if (new_pos < 16) {
 	    addr = new_pos;
-	    else
+		}
+	    else {
 	    addr = (new_pos - 16) + 0x40;
-
-	    lcd_send_cmd(0x80 | addr); // 0x80 - бит установки адреса
+		}
+	    lcd_send_cmd((1<<LCD_DDRAM) | addr);
 }
 
 /* End File */

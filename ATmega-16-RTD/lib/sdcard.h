@@ -11,5 +11,8 @@
 
 void  sd_init(void);                       
 uint8_t sd_write_line(const char *str);    
+void sd_iter_reset(void);
+uint8_t sd_read_line(int8_t dir, char *dst, uint8_t dst_size);
+static uint8_t sd_cmd(uint8_t cmd, uint32_t arg, uint8_t crc);
 
 #endif

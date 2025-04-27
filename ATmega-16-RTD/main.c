@@ -15,6 +15,8 @@
 
 #define BTN_MASK (1<<PC3)
 #define LED_MASK (1<<PD7)
+#define BTN_FWD   PC5          /* ЂвперЄдї  Ц следующа€ запись */
+#define BTN_BWD   PC6          /* Ђназадї   Ц предыдуща€ запись */
 
 
 struct pcf_time t;
@@ -25,14 +27,16 @@ static inline uint8_t bcd2dec(uint8_t v) { return ((v >> 4) * 10) + (v & 0x0F); 
 	
 static inline void time2str(struct pcf_time *time, uint8_t *buf)
 {
-    *buf++ = (time->hours    >> 4) + '0';
-    *buf++ = (time->hours    & 0x0F) + '0';
+    uint8_t hrs = time->hours & 0x3F;
+
+    *buf++ = (hrs >> 4) + '0';
+    *buf++ = (hrs & 0x0F) + '0';
     *buf++ = ':';
-    *buf++ = (time->minutes  >> 4) + '0';
-    *buf++ = (time->minutes  & 0x0F) + '0';
+    *buf++ = (time->minutes >> 4) + '0';
+    *buf++ = (time->minutes & 0x0F) + '0';
     *buf++ = ':';
-    *buf++ = (time->seconds  >> 4) + '0';
-    *buf++ = (time->seconds  & 0x0F) + '0';
+    *buf++ = (time->seconds >> 4) + '0';
+    *buf++ = (time->seconds & 0x0F) + '0';
 }
 
 
@@ -105,10 +109,8 @@ int main(void)
 	DDRD = 0xFF;
 	lcd_init();             
 	max31865_init(0, 0);
-	
-
-	
 	lcd_disp_str((uint8_t *)"Time:");     
+
 
 	DDRB |= (1 << PB4);
 	TCCR0 = (1 << CS01) | (1 << CS00);
@@ -118,6 +120,12 @@ int main(void)
 	PORTC |= BTN_MASK;
 	sei();
 	
+	DDRC  &= ~((1<<BTN_FWD)|(1<<BTN_BWD)); 
+	PORTC |=  ((1<<BTN_FWD)|(1<<BTN_BWD)); 
+	
+	char logbuf[32];
+	sd_iter_reset(); 
+	
 	char line[32];
 	float temp = max31865_read_temperature();
 
@@ -125,6 +133,27 @@ int main(void)
 	
 	while (1) {
 		print_time();
+		
+		
+		/* --- обработка кнопок --------------------------------------- */
+		static uint8_t prev_btn = 0xFF;
+		uint8_t now = PINC;
+
+		if (!(now & (1<<BTN_FWD)) && (prev_btn & (1<<BTN_FWD))) { /* нажатие */
+		   if (sd_read_line(+1, logbuf, sizeof(logbuf))==0) {
+		    lcd_mov_cursor(16);           /* начало 2-й строки */
+		    lcd_disp_buf((uint8_t*)logbuf, strlen(logbuf));
+		   }
+		}
+		if (!(now & (1<<BTN_BWD)) && (prev_btn & (1<<BTN_BWD))) {
+		   if (sd_read_line(-1, logbuf, sizeof(logbuf))==0) {
+		    lcd_mov_cursor(16);
+		    lcd_disp_buf((uint8_t*)logbuf, strlen(logbuf));
+		   }
+		}
+		prev_btn = now;
+		
+		
 		temp = max31865_read_temperature();
 		cnt++;
 		
