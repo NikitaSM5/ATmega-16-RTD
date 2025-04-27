@@ -17,13 +17,19 @@
 #define LED_MASK (1<<PD7)
 #define BTN_FWD   PC5          /* ЂвперЄдї  Ц следующа€ запись */
 #define BTN_BWD   PC6          /* Ђназадї   Ц предыдуща€ запись */
+#define BTN_FWD_MASK  (1<<BTN_FWD)
+#define BTN_BWD_MASK  (1<<BTN_BWD)
 
-
+static uint32_t meas_no = 0;
 struct pcf_time t;
 static uint8_t lcd_buf[3 * sizeof(t) - 1] = {0};
 volatile uint8_t disp_digits[4];
 static inline uint8_t bcd2dec(uint8_t v) { return ((v >> 4) * 10) + (v & 0x0F); }
 	
+struct user_flags{
+	uint8_t btn_fwd:1;
+	uint8_t btn_bwd:1;
+	} flags;	
 	
 static inline void time2str(struct pcf_time *time, uint8_t *buf)
 {
@@ -100,7 +106,7 @@ static void print_time(void){
 		 lcd_disp_buf(lcd_buf, 8);
 }
 
-
+	char logbuf[32];
 int main(void)
 {
 	sevseg_init();
@@ -123,7 +129,7 @@ int main(void)
 	DDRC  &= ~((1<<BTN_FWD)|(1<<BTN_BWD)); 
 	PORTC |=  ((1<<BTN_FWD)|(1<<BTN_BWD)); 
 	
-	char logbuf[32];
+
 	sd_iter_reset(); 
 	
 	char line[32];
@@ -139,18 +145,18 @@ int main(void)
 		static uint8_t prev_btn = 0xFF;
 		uint8_t now = PINC;
 
-		if (!(now & (1<<BTN_FWD)) && (prev_btn & (1<<BTN_FWD))) { /* нажатие */
-		   if (sd_read_line(+1, logbuf, sizeof(logbuf))==0) {
-		    lcd_mov_cursor(16);           /* начало 2-й строки */
-		    lcd_disp_buf((uint8_t*)logbuf, strlen(logbuf));
-		   }
-		}
-		if (!(now & (1<<BTN_BWD)) && (prev_btn & (1<<BTN_BWD))) {
-		   if (sd_read_line(-1, logbuf, sizeof(logbuf))==0) {
-		    lcd_mov_cursor(16);
-		    lcd_disp_buf((uint8_t*)logbuf, strlen(logbuf));
-		   }
-		}
+		//if (!(now & (1<<BTN_FWD)) && (prev_btn & (1<<BTN_FWD))) { /* нажатие */
+		//   if (sd_read_line(+1, logbuf, sizeof(logbuf))==0) {
+		//    lcd_mov_cursor(16);           /* начало 2-й строки */
+		//    lcd_disp_buf((uint8_t*)logbuf, strlen(logbuf));
+		//   }
+		//}
+		//if (!(now & (1<<BTN_BWD)) && (prev_btn & (1<<BTN_BWD))) {
+		//   if (sd_read_line(-1, logbuf, sizeof(logbuf))==0) {
+		//    lcd_mov_cursor(16);
+		//    lcd_disp_buf((uint8_t*)logbuf, strlen(logbuf));
+		//   }
+		//}
 		prev_btn = now;
 		
 		
@@ -159,11 +165,17 @@ int main(void)
 		
 		if(cnt == 10){
 		cnt = 0;
-		int16_t t10 = (int16_t)(temp * 10.0f + (temp>=0 ? 0.5f : -0.5f));
-		sprintf(line,"%02u:%02u,%d.%01u\r\n",
-		bcd2dec(t.hours), bcd2dec(t.minutes),
-		t10/10, (uint16_t)abs(t10)%10);
-		sd_write_line(line);
+		int16_t t10 = (int16_t)(temp*10.0f + (temp>=0 ? 0.5f : -0.5f));
+
+		meas_no++;
+		sprintf(line, "%lu %02u:%02u,%+d.%01u\n",
+		meas_no,
+		bcd2dec(t.hours & 0x3F),       /* <-- ѕ–ј¬»Ћ№Ќќ */
+		bcd2dec(t.minutes),
+		t10/10,
+		(uint16_t)abs(t10)%10);
+
+		  sd_write_line(line);      /* курсор остаЄтс€ в конце => Ђназадї работает */
 		}
 		
 		if (!(PINC & BTN_MASK)) {
@@ -182,5 +194,24 @@ int main(void)
 
 ISR(TIMER0_OVF_vect)
 {
-	sevseg_display_process(disp_digits);      
+	sevseg_display_process(disp_digits);     
+	if((PINC & (1 << BTN_FWD)) == 0) {
+		if(flags.btn_fwd == 0){
+			flags.btn_fwd = 1;
+			 if (sd_read_line(+1, logbuf, sizeof(logbuf))==0) {
+				 lcd_mov_cursor(16);           /* начало 2-й строки */
+				 lcd_disp_buf((uint8_t*)logbuf, strlen(logbuf));
+			 }
+		}
+	} else flags.btn_fwd = 0;
+	
+	if((PINC & (1 << BTN_BWD)) == 0) {
+		if(flags.btn_bwd == 0){
+			flags.btn_bwd = 1;
+			 if (sd_read_line(-1, logbuf, sizeof(logbuf))==0) {
+				 lcd_mov_cursor(16);
+				 lcd_disp_buf((uint8_t*)logbuf, strlen(logbuf));
+			 }
+		}
+	} else flags.btn_bwd = 0;
 }

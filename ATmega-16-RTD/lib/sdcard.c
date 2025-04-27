@@ -50,33 +50,56 @@ static uint8_t get_char(uint8_t *ch)      /* 1-байтовое чтение */
 /* dir = +1 Ц следующа€ строка, dir = -1 Ц предыдуща€ (примитивно)   */
 uint8_t sd_read_line(int8_t dir, char *dst, uint8_t dst_sz)
 {
-    if (dir > 0) {                          /* ==> вперЄд =================*/
-        uint8_t c; uint8_t n = 0;
-        while (!get_char(&c) && c!=0xFF) {  /* 0xFF Ц Ђпустойї сектор      */
-            if (c=='\n') { dst[n]=0; it_index++; return 0; }
-            if (c!='\r' && n<dst_sz-1) dst[n++]=c;
-        }
-        return 2;                           /* достигли конца журнала      */
-    }
-    else {                                  /* <== назад  (упрощЄнно) =====*/
-        if (it_off<2 && it_sector==1) return 3;  /* уже самое начало      */
-        /* шаг назад на 2 символа ( \r\n ) и ищем предыдущий \n          */
-        if (it_off<2) {                     /* перейти в пред. сектор      */
-            if (read_sector(--it_sector)) return 1;
-            it_off = 512;
-        }
-        it_off -= 2;                        /* теперь мы перед \r\n        */
-        while (1) {
-            if (it_off==0) {
-                if (it_sector==1) break;
-                if (read_sector(--it_sector)) return 1;
-                it_off = 512;
-            }
-            if (sec_buf[--it_off]=='\n') { it_off++; break; }
-        }
-        it_index--;
-        return sd_read_line(+1,dst,dst_sz); /* вз€ть строку ЂвперЄдї       */
-    }
+	/* ---------------- ¬ѕ≈–®ƒ (+1) ------------------------------ */
+	if (dir > 0) {
+		uint8_t c, n = 0;
+		while (!get_char(&c) && c != 0xFF) {            /* 0xFF = пусто */
+			if (c == '\n') { dst[n] = 0; it_index++; return 0; }
+			if (n < dst_sz - 1) dst[n++] = c;           /* пишем всЄ, \r нет */
+		}
+		return 2;                                       /* конец журнала */
+	}
+
+if (it_sector == 1 && it_off == 0) return 3;     /* уже самое начало */
+
+uint8_t nl_seen = 0;            /* сколько '\n' нашли (0/1)       */
+
+/* Ўаг 0: начинаем с байта *перед* текущим курсором */
+if (it_off == 0) {                                  /* начало сектора */
+	if (read_sector(--it_sector)) return 1;
+	it_off = 511;
+	} else {
+	--it_off;
+}
+
+/* Ўаг 1: идЄм назад, пока не встретим ƒ¬ј '\n' или MBR */
+while (1) {
+	if (sec_buf[it_off] == '\n') {
+		if (nl_seen == 0) {
+			/* это '\n' текущей строки Ц просто отмечаем и двигаемс€ дальше */
+			nl_seen = 1;
+			} else {
+			/* это '\n' предыдущей строки Ц начало найдено */
+			++it_off;           /* курсор ? первый символ предыдущей записи */
+			break;
+		}
+	}
+
+	/* сдвиг на байт назад, переход между секторами */
+	if (it_off == 0) {
+		if (it_sector == 1) {           /* достигли самого начала журнала */
+			/* предыдуща€ строка начинаетс€ с offset 0 */
+			break;
+		}
+		if (read_sector(--it_sector)) return 1;
+		it_off = 511;
+		} else {
+		--it_off;
+	}
+}
+
+it_index--;
+return sd_read_line(+1, dst, dst_sz);    /* прочитать найденную строку */
 }
 
 static uint8_t wait_ready(uint16_t tout_ms)
@@ -184,6 +207,7 @@ uint8_t sd_write_line(const char *str)
     }
     memcpy(&sec_buf[cur_off],str,len);
     cur_off += len;
+	
     /* «аписываем каждый раз Ц лога немного */
     return write_sector(cur_sector);
 }
