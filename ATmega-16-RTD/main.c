@@ -29,7 +29,7 @@ struct pcf_time rtc_time;                 /* буфер времени из PCF8583       */
 volatile uint8_t disp_digits[4];          /* буфер 7?segment индикатора     */
 static inline uint8_t bcd2dec(uint8_t v)  { return ((v >> 4) * 10) + (v & 0x0F); }
 
-struct user_flags {                       /* антидребезг дл€ навигации SD   */
+volatile struct user_flags {                       /* антидребезг дл€ навигации SD   */
     uint8_t btn_fwd:1;
     uint8_t btn_bwd:1;
 	uint8_t btn_tx  :1;
@@ -111,6 +111,7 @@ static void timer1_init(void)
 
 ISR(TIMER1_COMPA_vect)
 {
+	
     static uint8_t sec_cnt = 0;
     flags.flag_1s = 1;                          /* каждую секунду                 */
     if (++sec_cnt >= 5) {                /* каждые 10†с                    */
@@ -129,9 +130,10 @@ ISR(TIMER0_OVF_vect)
     if ((PINC & BTN_FWD_MASK) == 0) {
         if (!flags.btn_fwd) {
             flags.btn_fwd = 1;
-
+			lcd_mov_cursor(16);
+			lcd_disp_str((uint8_t *)"BTN_PC5");
             if (sd_read_line(+1, buf, sizeof buf) == 0) {
-                lcd_mov_cursor(16);
+                //lcd_mov_cursor(16);
                 lcd_disp_str((uint8_t *)buf);
             }
         }
@@ -141,8 +143,10 @@ ISR(TIMER0_OVF_vect)
         if (!flags.btn_bwd) {
             flags.btn_bwd = 1;
             sd_iter_reset();
+			lcd_mov_cursor(16);
+			lcd_disp_str((uint8_t *)"BTN_PC6");
             if (sd_read_line(+1, buf, sizeof buf) == 0) {
-                lcd_mov_cursor(16);
+                //lcd_mov_cursor(16);
                 lcd_disp_str((uint8_t *)buf);
             }
         }
@@ -160,19 +164,22 @@ ISR(TIMER0_OVF_vect)
 /* ------------------------------------------------------------------------- */
 int main(void)
 {
+	
+	char line[32];
+	float temperature = 0.0f;
     /* --- HAL/перифери€ ---------------------------------------------------*/
-    sevseg_init();
-    sevseg_blank_leading(1);
-    twi_init();
 	uart_init();
+	sevseg_init();
 	DDRD |= (1 << PD2)|(1 << PD3)|(1 << PD4)|(1 << PD5)|(1 << PD6)|(1 << PD7);
 	
     lcd_init();
     max31865_init(0, 0);
     lcd_disp_str((uint8_t *)"Time:");
+	lcd_mov_cursor(16);
+	sd_flush();
 
-    DDRC &= ~(BTN_MASK | BTN_FWD_MASK | BTN_BWD_MASK); /* входы?кнопки      */
-    PORTC |=  (BTN_MASK | BTN_FWD_MASK | BTN_BWD_MASK);/* pull?up           */
+    DDRC &= ~(BTN_MASK|BTN_FWD_MASK | BTN_BWD_MASK);  /* входы?кнопки      */
+    PORTC |=  (BTN_MASK|BTN_FWD_MASK | BTN_BWD_MASK); /* pull?up           */
 	DDRC &= ~(1<<PC7);
 	PORTC |= (1 << PC7);
     /* Timer0: уже используетс€ библиотекой sevseg дл€ мультиплексации */
@@ -180,14 +187,15 @@ int main(void)
     TIMSK |= (1<<TOIE0);
 
     timer1_init();                      /* 1†√ц системный Ђтикї            */
-
-    sd_iter_reset();                    /* позици€ чтени€ лог?файла */
-
+    sd_iter_reset();                    /* позици€ чтени€ логфайла */
+	
+	twi_init();
     sei();                              /* глобально разрешить IRQ         */
-
+	pcf_init();
+	
+	
     /* --- рабочие переменные ---------------------------------------------*/
-    char line[32];
-    float temperature = 0.0f;
+
 
     /* -------------------- main loop (co?operative) ----------------------*/
     while(1) {
@@ -212,10 +220,10 @@ int main(void)
             }
 
             /* строка ЂTime: hh:mm:ssї на LCD                                */
-            char buf[10];
-            time2str(&rtc_time, buf);
+            char t[10];
+            time2str(&rtc_time, t);
             lcd_mov_cursor(6);
-            lcd_disp_str((uint8_t *)buf);
+            lcd_disp_str((uint8_t *)t);
         }
 
         if (flags.flag_10s) {                 /* каждые 10†с Ч измерить & лог    */

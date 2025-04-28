@@ -45,7 +45,7 @@ static inline void twi_txrx(
     twi.data = buf;
     twi.count = size;
 
-    TWCR |= (1 << TWSTA);
+    TWCR = (1<<TWINT) | (1<<TWSTA) | (1<<TWEN) | (1<<TWIE);
 }
 
 /**
