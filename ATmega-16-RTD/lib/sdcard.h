@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 /* Chip-select */
-#define SD_CS_PORT PORTA
-#define SD_CS_DDR  DDRA
-#define SD_CS_PIN  PA0
+#define SD_CS_PORT PORTC
+#define SD_CS_DDR  DDRC
+#define SD_CS_PIN  PC4
 
 void  sd_init(void);                       
 uint8_t sd_write_line(const char *str);    

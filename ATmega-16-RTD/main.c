@@ -1,5 +1,5 @@
 
-//#include "sevseg.h"
+#include "sevseg.h"
 #include "max31865.h"
 #include "main.h"
 #include "twi.h"
@@ -26,6 +26,8 @@
 /* --- Global variables ---------------------------------------------------- */
 static uint32_t meas_no  = 0;             /* номер измерени€/строки        */
 struct pcf_time rtc_time;                 /* буфер времени из PCF8583       */
+uint32_t btn_fwd_clicked = 0;
+uint32_t btn_bwd_clicked = 0;
 
 volatile uint8_t disp_digits[4];          /* буфер 7?segment индикатора     */
 static inline uint8_t bcd2dec(uint8_t v)  { return ((v >> 4) * 10) + (v & 0x0F); }
@@ -49,22 +51,33 @@ static inline void time2str(const struct pcf_time *t, char *buf)
 static void temperature_to_digits_tenth(float temp)
 {
     uint8_t digits[4];
-
     uint8_t negative = (temp < 0);
+
     if (negative) temp = -temp;
 
-    uint16_t tenths = (uint16_t)(temp * 10.0f + 0.5f);
-    tenths = (tenths > 9999) ? 9999 : tenths;
+    // scale to hundredths and round
+    uint16_t hundredths = (uint16_t)(temp * 100.0f + (temp >= 0 ? 0.5f : -0.5f));
+    if (hundredths > 9999) hundredths = 9999;
 
-    //sevseg_bin2bcd(tenths, digits);       /* младший разр€д = дес€тые ∞—    */
+    // convert to BCD for each of the 4 digits
+    sevseg_bin2bcd(hundredths, digits);
 
-    if (negative)       digits[3] = 0x0A; /* Ђминусї дл€ 7?segment          */
-    else if (digits[3] == 0) digits[3] = 0; /* убрать незначащий Ђ0ї        */
+    // if negative, put УminusФ code in the MSB position
+    if (negative) {
+	    digits[3] = 0x0A;          // dec2sevseg[0x0A] ? minus
+	    } else if (digits[3] == 0) {
+	    // optional: blank an unused leading zero
+	    // requires enabling blank_leading below
+	    digits[3] = 0;
+    }
 
     ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        for (uint8_t i = 0; i < 4; i++) disp_digits[i] = digits[i];
+	    for (uint8_t i = 0; i < 4; i++)
+	    disp_digits[i] = digits[i];
     }
-    //sevseg_set_dot(1);                    /* после целых показать точку     */
+
+    sevseg_set_dot(2);            // dot between 2nd and 3rd digit (from the right)
+    sevseg_blank_leading(1);      // turn on leading-zero blanking
 }
 
 static void uart_init(void)
@@ -95,7 +108,7 @@ static void time_to_digits_mmss(const struct pcf_time *t)
     ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         for (uint8_t i = 0; i < 4; i++) disp_digits[i] = d[i];
     }
-    //sevseg_set_dot(2);                    /* точка между ћћ и SS           */
+    sevseg_set_dot(2);                    /* точка между ћћ и SS           */
 }
 
 /* --------------------------- Timer†1 setup --------------------------------
@@ -125,17 +138,18 @@ ISR(TIMER1_COMPA_vect)
 char buf[32];
 ISR(TIMER0_OVF_vect)
 {
-   // sevseg_display_process(disp_digits);
+   sevseg_display_process(disp_digits);
 /*---- навигаци€ по файлу SD -------------------------------------------*/
     if ((PINC & BTN_FWD_MASK) == 0) {
         if (!flags.btn_fwd) {
             flags.btn_fwd = 1;
-      lcd_mov_cursor(16);
-      //lcd_disp_str((uint8_t *)"BTN_PC5");
+		  if(btn_fwd_clicked < meas_no){
+			  btn_fwd_clicked++;
+            lcd_mov_cursor(16);
             if (sd_read_line(+1, buf, sizeof buf) == 0) {
-                //lcd_mov_cursor(16);
                 lcd_disp_str((uint8_t *)buf);
             }
+		}
         }
     } else flags.btn_fwd = 0;
 
@@ -143,10 +157,9 @@ ISR(TIMER0_OVF_vect)
         if (!flags.btn_bwd) {
             flags.btn_bwd = 1;
             sd_iter_reset();
-      lcd_mov_cursor(16);
-     // lcd_disp_str((uint8_t *)"BTN_PC6");
+            lcd_mov_cursor(16);
             if (sd_read_line(+1, buf, sizeof buf) == 0) {
-                //lcd_mov_cursor(16);
+                btn_fwd_clicked = 0;
                 lcd_disp_str((uint8_t *)buf);
             }
         }
@@ -169,19 +182,19 @@ int main(void)
   float temperature = 0.0f;
     /* --- HAL/перифери€ ---------------------------------------------------*/
   uart_init();
-  //sevseg_init();
+  sevseg_init();
   DDRD |= (1 << PD2)|(1 << PD3)|(1 << PD4)|(1 << PD5)|(1 << PD6)|(1 << PD7);
   
     lcd_init();
     max31865_init(0, 0);
-    lcd_disp_str((uint8_t *)"Time:");
-  lcd_mov_cursor(16);
-  sd_flush();
+    //lcd_disp_str((uint8_t *)"Time: ");
+    lcd_mov_cursor(16);
+    sd_flush();
 
     DDRC &= ~(BTN_MASK|BTN_FWD_MASK | BTN_BWD_MASK);  /* входы?кнопки      */
     PORTC |=  (BTN_MASK|BTN_FWD_MASK | BTN_BWD_MASK); /* pull?up           */
-  DDRC &= ~(1<<PC7);
-  PORTC |= (1 << PC7);
+    DDRC &= ~(1<<PC7);
+    PORTC |= (1 << PC7);
     /* Timer0: уже используетс€ библиотекой sevseg дл€ мультиплексации */
     TCCR0 = (1<<CS01) | (1<<CS00);     /* prescaler 64, ~1.024†мс overflow */
     TIMSK |= (1<<TOIE0);
@@ -189,9 +202,10 @@ int main(void)
     timer1_init();                      /* 1†√ц системный Ђтикї            */
     sd_iter_reset();                    /* позици€ чтени€ логфайла */
   
-  twi_init();
+    twi_init();
+
     sei();                              /* глобально разрешить IRQ         */
-  pcf_init();
+    pcf_init();
   
   
     /* --- рабочие переменные ---------------------------------------------*/
@@ -205,40 +219,47 @@ int main(void)
        flags.tx_req = 0; 
      }
     
-        if (flags.flag_1s) {                  /* ежесекундные задачи             */
-            flags.flag_1s = 0;
-            pcf_read_time(&rtc_time);
-            while (twi_status != TWI_STATUS_RX_COMPLETE);
-            twi_status = TWI_STATUS_READY;
-      temperature = max31865_read_temperature();
+           if (flags.flag_1s) {                  /* ежесекундные задачи             */
+           flags.flag_1s = 0;
+           pcf_read_time(&rtc_time);
+           while (twi_status != TWI_STATUS_RX_COMPLETE);
+           twi_status = TWI_STATUS_READY;
+           temperature = max31865_read_temperature();
 
-            /* выбор отображени€: кнопка удерживаетс€ Ц часы, иначе температура */
-            if ((PINC & BTN_MASK) == 0) {
-                time_to_digits_mmss(&rtc_time);
-            } else {
-                temperature_to_digits_tenth(temperature); /* последнее измерение */
-            }
+           /* выбор отображени€: кнопка удерживаетс€ Ц часы, иначе температура */
+           if ((PINC & BTN_MASK) == 0) {
+               time_to_digits_mmss(&rtc_time);
+           } else {
+               temperature_to_digits_tenth(temperature);
+           }
 
-            /* строка ЂTime: hh:mm:ssї на LCD                                */
-            char t[10];
-            time2str(&rtc_time, t);
-            lcd_mov_cursor(6);
-            lcd_disp_str((uint8_t *)t);
-        }
+           /* строка Ђhh:mm:ssї + справа Ч число записей на SD */
+           char t[10], cnt[6];
+           time2str(&rtc_time, t);
+           sprintf(cnt, "%lu", meas_no);
+           lcd_mov_cursor(0);
+           lcd_disp_str((uint8_t *)t);
+           /* сразу после 8 символа времени */
+           lcd_mov_cursor(12);
+		   lcd_disp_str((uint8_t *)"#");
+           lcd_disp_str((uint8_t *)cnt);
+       }
 
-        if (flags.flag_10s) {                 /* каждые 10†с Ч измерить & лог    */
-            flags.flag_10s = 0;
-            
-            int16_t t10 = (int16_t)(temperature * 10.0f + (temperature >= 0 ? 0.5f : -0.5f));
-            meas_no++;
-            sprintf(line, "%lu %02u:%02u,%+d.%01u\n",
-                    meas_no,
-                    bcd2dec(rtc_time.hours & 0x3F),
-                    bcd2dec(rtc_time.minutes),
-                    t10/10,
-                    (uint16_t)abs(t10)%10);
-            sd_write_line(line);
-        }
+	        if (flags.flag_10s) {                 /* каждые 10 с Ч измерить & лог    */
+		        flags.flag_10s = 0;
+		        
+		        /* логируем с точностью до 0.01∞C */
+		        int16_t t100 = (int16_t)(temperature * 100.0f + (temperature >= 0 ? 0.5f : -0.5f));
+		        meas_no++;
+		        /* формат: <номер> hh:mm,+X.YY\n */
+		        sprintf(line, "%lu %02u:%02u,%+d.%02u\n",
+		        meas_no,
+		        bcd2dec(rtc_time.hours & 0x3F),
+		        bcd2dec(rtc_time.minutes),
+		        t100/100,
+		        (uint16_t)abs(t100)%100);
+		        sd_write_line(line);
+		        }
 
         /* необ€зательное энергосбережение: сон до следующего прерывани€ */
         //sleep_mode();
