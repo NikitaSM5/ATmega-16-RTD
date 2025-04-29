@@ -33,12 +33,13 @@ volatile uint8_t disp_digits[4];          /* буфер 7?segment индикатора     */
 static inline uint8_t bcd2dec(uint8_t v)  { return ((v >> 4) * 10) + (v & 0x0F); }
 
 volatile struct user_flags {                       /* антидребезг для навигации SD   */
-    uint8_t btn_fwd:1;
-    uint8_t btn_bwd:1;
+  uint8_t btn_fwd:1;
+  uint8_t btn_bwd:1;
   uint8_t btn_tx  :1;
   uint8_t flag_1s  :1;
   uint8_t flag_10s :1;
   uint8_t tx_req  :1;
+  uint8_t btn_lock :1;
 } flags;
 
 /* ------------------------------------------------------------------------- */
@@ -140,6 +141,7 @@ ISR(TIMER0_OVF_vect)
 {
    sevseg_display_process(disp_digits);
 /*---- навигация по файлу SD -------------------------------------------*/
+	if(flags.btn_lock == 0){
     if ((PINC & BTN_FWD_MASK) == 0) {
         if (!flags.btn_fwd) {
             flags.btn_fwd = 1;
@@ -147,24 +149,39 @@ ISR(TIMER0_OVF_vect)
 			  btn_fwd_clicked++;
             lcd_mov_cursor(16);
             if (sd_read_line(+1, buf, sizeof buf) == 0) {
+
                 lcd_disp_str((uint8_t *)buf);
             }
 		}
         }
     } else flags.btn_fwd = 0;
-
+	
     if ((PINC & BTN_BWD_MASK) == 0) {
         if (!flags.btn_bwd) {
             flags.btn_bwd = 1;
             sd_iter_reset();
-            lcd_mov_cursor(16);
+            
             if (sd_read_line(+1, buf, sizeof buf) == 0) {
                 btn_fwd_clicked = 0;
+				lcd_send_cmd(1<<LCD_CLR);
+				_delay_ms(2);
+				char t[10], cnt[6];
+				time2str(&rtc_time, t);
+				sprintf(cnt, "%lu", meas_no);
+				lcd_mov_cursor(0);
+				lcd_disp_str((uint8_t *)t);
+				/* сразу после 8 символа времени */
+				lcd_mov_cursor(12);
+				lcd_disp_str((uint8_t *)"#");
+				lcd_disp_str((uint8_t *)cnt);
+				lcd_mov_cursor(0);
+				lcd_mov_cursor(16);
                 lcd_disp_str((uint8_t *)buf);
             }
         }
     } else flags.btn_bwd = 0;
-  
+	
+	
    if(!(PINC & (1 << PC7))){
      if(!flags.btn_tx)
      { 
@@ -172,6 +189,19 @@ ISR(TIMER0_OVF_vect)
        flags.tx_req = 1;
        }
    }else flags.btn_tx=0;
+   }
+}
+
+
+static void uart_dump_log(void)
+{
+	char line[32];
+
+	sd_iter_reset();                 // в начало журнала
+	while (sd_read_line(+1, line, sizeof line) == 0) {
+		uart_puts(line);
+		uart_puts("\n");           // CR-LF для терминала ПК
+	}
 }
 
 /* ------------------------------------------------------------------------- */
@@ -181,13 +211,12 @@ int main(void)
   char line[32];
   float temperature = 0.0f;
     /* --- HAL/периферия ---------------------------------------------------*/
-  uart_init();
-  sevseg_init();
-  DDRD |= (1 << PD2)|(1 << PD3)|(1 << PD4)|(1 << PD5)|(1 << PD6)|(1 << PD7);
+	 uart_init();
+	 sevseg_init();
+	 DDRD |= (1 << PD2)|(1 << PD3)|(1 << PD4)|(1 << PD5)|(1 << PD6)|(1 << PD7);
   
     lcd_init();
     max31865_init(0, 0);
-    //lcd_disp_str((uint8_t *)"Time: ");
     lcd_mov_cursor(16);
     sd_flush();
 
@@ -203,20 +232,25 @@ int main(void)
     sd_iter_reset();                    /* позиция чтения логфайла */
   
     twi_init();
-
     sei();                              /* глобально разрешить IRQ         */
     pcf_init();
   
-  
-    /* --- рабочие переменные ---------------------------------------------*/
-
-
-    /* -------------------- main loop (co?operative) ----------------------*/
     while(1) {
     
-     if(flags.tx_req){
-       uart_puts(buf); 
-       flags.tx_req = 0; 
+     if (flags.tx_req) {
+	     uart_dump_log();  
+		 sd_iter_reset();
+		 
+		 lcd_send_cmd(1<<LCD_CLR);
+		 _delay_ms(2);
+		 lcd_disp_str((uint8_t *)"//UART//");
+		 lcd_mov_cursor(16);
+		 if (sd_read_line(+1, buf, sizeof(buf)) == 0) {
+			 btn_fwd_clicked = 0;
+			 lcd_disp_str((uint8_t *)buf);
+		 }
+		               
+	     flags.tx_req = 0;
      }
     
            if (flags.flag_1s) {                  /* ежесекундные задачи             */
@@ -246,6 +280,7 @@ int main(void)
        }
 
 	        if (flags.flag_10s) {                 /* каждые 10 с — измерить & лог    */
+				flags.btn_lock = 1;
 		        flags.flag_10s = 0;
 		        
 		        /* логируем с точностью до 0.01°C */
@@ -259,9 +294,8 @@ int main(void)
 		        t100/100,
 		        (uint16_t)abs(t100)%100);
 		        sd_write_line(line);
+				flags.btn_lock = 0;
 		        }
 
-        /* необязательное энергосбережение: сон до следующего прерывания */
-        //sleep_mode();
     }
 }

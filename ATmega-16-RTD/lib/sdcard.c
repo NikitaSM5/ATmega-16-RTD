@@ -18,6 +18,22 @@ static uint8_t  sec_buf[512];
 /* ==== Вспомогательные функции ======================================= */
 static uint8_t spi_x(uint8_t v){ return spi_transfer(v); }
 
+/* Отправить команду SD (CMD или ACMD) */
+static uint8_t sd_cmd(uint8_t cmd, uint32_t arg, uint8_t crc)
+{
+	sd_deselect(); spi_x(0xFF);            /* 8 клоков перед CS low         */
+	sd_select  ();
+	spi_x(cmd | 0x40);
+	spi_x(arg>>24); spi_x(arg>>16); spi_x(arg>>8); spi_x(arg);
+	spi_x(crc);
+	/* ждём первый байт ответа (MSB=0)                           */
+	for(uint8_t i=0;i<10;i++){
+		uint8_t r = spi_x(0xFF);
+		if(!(r & 0x80)) return r;
+	}
+	return 0xFF;                           /* timeout                       */
+}
+
 
 static uint8_t wait_token(uint8_t token, uint16_t tout_ms)
 {
@@ -119,26 +135,11 @@ uint8_t sd_read_line(int8_t dir, char *dst, uint8_t dst_sz)
 }
 
 
-/* Отправить команду SD (CMD или ACMD) */
-static uint8_t sd_cmd(uint8_t cmd, uint32_t arg, uint8_t crc)
-{
-    sd_deselect(); spi_x(0xFF);            /* 8 клоков перед CS low         */
-    sd_select  ();
-    spi_x(cmd | 0x40);
-    spi_x(arg>>24); spi_x(arg>>16); spi_x(arg>>8); spi_x(arg);
-    spi_x(crc);
-    /* ждём первый байт ответа (MSB=0)                           */
-    for(uint8_t i=0;i<10;i++){
-        uint8_t r = spi_x(0xFF);
-        if(!(r & 0x80)) return r;
-    }
-    return 0xFF;                           /* timeout                       */
-}
 
 /* ==== Мини-инициализация (только SD/SDHC, без FAT) ==================== */
 void sd_init(void)
 {
-    /* CS pin как output = inactive high */
+
     SD_CS_DDR  |= (1<<SD_CS_PIN);
     SD_CS_PORT |= (1<<SD_CS_PIN);
 
