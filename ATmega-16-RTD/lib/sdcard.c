@@ -21,17 +21,17 @@ static uint8_t spi_x(uint8_t v){ return spi_transfer(v); }
 /* ќтправить команду SD (CMD или ACMD) */
 static uint8_t sd_cmd(uint8_t cmd, uint32_t arg, uint8_t crc)
 {
-	sd_deselect(); spi_x(0xFF);            /* 8 клоков перед CS low         */
+	sd_deselect(); spi_x(0xFF);            /* 8 клоков перед CS low*/
 	sd_select  ();
 	spi_x(cmd | 0x40);
 	spi_x(arg>>24); spi_x(arg>>16); spi_x(arg>>8); spi_x(arg);
 	spi_x(crc);
-	/* ждЄм первый байт ответа (MSB=0)                           */
+	/* ждЄм первый байт ответа (MSB=0)*/
 	for(uint8_t i=0;i<10;i++){
 		uint8_t r = spi_x(0xFF);
 		if(!(r & 0x80)) return r;
 	}
-	return 0xFF;                           /* timeout                       */
+	return 0xFF;                           /* timeout*/
 }
 
 
@@ -143,7 +143,7 @@ void sd_init(void)
     SD_CS_DDR  |= (1<<SD_CS_PIN);
     SD_CS_PORT |= (1<<SD_CS_PIN);
 
-    /* ƒес€ть пустых байт при CS=high Ц как требует SD-спецификаци€ */
+    /* ƒес€ть пустых байт при CS = high Ц как требует SD-спецификаци€ */
     for(uint8_t i=0;i<10;i++) spi_x(0xFF);
 
     /* CMD0 Ц GO_IDLE_STATE */
