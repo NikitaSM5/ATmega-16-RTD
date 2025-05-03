@@ -74,7 +74,7 @@ float max31865_read_temperature(void)
 		} else {
 		/* Use full equation with C term for <0 °C */
 		/* Solve iteratively (Newton) */
-		temp = -50.0f; /* initial */
+		temp = -50.0f; /* initial */ 
 		for (uint8_t i=0;i<6;i++) {
 			float f = MAX31865_R0*(1 + MAX31865_A*temp + MAX31865_B*temp*temp + MAX31865_C*(temp-100)*temp*temp*temp) - Rt;
 			float df = MAX31865_R0*(MAX31865_A + 2*MAX31865_B*temp + 3*MAX31865_C*temp*temp - 200*MAX31865_C*temp);
