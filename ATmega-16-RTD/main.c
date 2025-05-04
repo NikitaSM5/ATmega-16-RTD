@@ -167,6 +167,7 @@ int main(void)
 	 sei();                              /* глобально разрешить IRQ         */
 	 pcf_init();
 
+	 meas_no = sd_get_entry_count();
 
 
 	/* --- главный цикл -------------------------------------------------- */
@@ -219,6 +220,7 @@ int main(void)
 				t100/100,
 				abs(t100)%100);
 				sd_write_line(linebuf);
+				sd_flush();
 
 				flags.btn_lock = 0;
 			}
@@ -227,6 +229,7 @@ int main(void)
 		/* --------------- навигация по логу ----------------------------- */
 		if (flags.nav_fwd && !flags.btn_lock) {
 			flags.nav_fwd = 0;
+			sd_flush();
 			if (nav_pos < (meas_no - 1)) {
 				++nav_pos;
 				if (sd_read_line(+1, linebuf, sizeof linebuf) == 0) {
@@ -239,6 +242,7 @@ int main(void)
 		if (flags.nav_bwd && !flags.btn_lock) {
 			flags.nav_bwd = 0;
 			sd_iter_reset();
+			sd_flush();
 			if (sd_read_line(+1, linebuf, sizeof linebuf) == 0) {
 				nav_pos = 0;
 				lcd_send_cmd(1<<LCD_CLR);
@@ -252,7 +256,7 @@ int main(void)
 		if (flags.uart_dump && !flags.btn_lock) {
 			flags.uart_dump = 0;
 			flags.btn_lock  = 1;
-
+			sd_flush();
 			uart_dump_log();
 			sd_iter_reset();
 
