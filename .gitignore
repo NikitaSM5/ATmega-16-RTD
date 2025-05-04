@@ -3,3 +3,11 @@
 *.Debug
 *.cproj
 *.xml
+/ATmega-16-RTD/Debug/
+Altium project/ATmega16-RTD/History/
+*.cdw.bak
+dz.pdsprj.DESKTOP-AG57C96.Никитосик.workspace
+Altium project/ATmega16-RTD/__Previews/ATmega16_RTD.SchDocPreview
+Altium project/ATmega16-RTD/ATmega16-RTD.PrjPcbStructure
+Altium project/ATmega16-RTD/ATmega16-RTD.Dat
+
