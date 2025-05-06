@@ -31,6 +31,13 @@
 #define BTN_BWD_MASK    (1<<BTN_BWD)
 #define LED_MASK        (1<<PD7)
 
+#define HOLD_INITIAL_DELAY_MS 250    // после первого шага
+#define REP_DELAY_MIN_MS        1   // минимальная задержка между шагами
+#define REP_DELAY_BASE_MS     500   // базовая величина для расчёта
+
+static volatile uint16_t fwd_hold_cnt, fwd_rep_cnt;
+static volatile uint16_t bwd_hold_cnt, bwd_rep_cnt;
+
 /* ---------------------------- Флаги -------------------------------------- */
 /* ---------------------------- Флаги -------------------------------------- */
 struct {
@@ -104,41 +111,91 @@ ISR(TIMER0_OVF_vect)
 {
 	sevseg_display_process(disp_digits);
 
+	/* читаем состояние кнопок (active low) */
 	static uint8_t prev = BTN_FWD_MASK | BTN_BWD_MASK | (1<<PC7) | (1<<PC3);
-	uint8_t cur = PINC & (BTN_FWD_MASK | BTN_BWD_MASK | (1<<PC7) | (1<<PC3));
+	uint8_t cur     = PINC & (BTN_FWD_MASK | BTN_BWD_MASK | (1<<PC7) | (1<<PC3));
 	uint8_t changed = prev ^ cur;
-	uint8_t pressed = changed & (~cur);
+	uint8_t pressed_edge = changed & (~cur);
 
-	if (pressed & BTN_FWD_MASK)  flags.nav_fwd  = 1;
-	if (pressed & BTN_BWD_MASK)  flags.nav_bwd  = 1;
-	if (pressed & (1<<PC7))      flags.uart_dump = 1;
-	if (pressed & (1<<PC3))      flags.history = 1;
+	/********** Вперёд (PC5) **********/
+	if (pressed_edge & BTN_FWD_MASK) {
+		flags.nav_fwd = 1;
+		fwd_hold_cnt = 0;
+		fwd_rep_cnt  = HOLD_INITIAL_DELAY_MS;
+	}
+	if (!(cur & BTN_FWD_MASK)) {
+		if (fwd_hold_cnt < UINT16_MAX) fwd_hold_cnt++;
+		if (fwd_hold_cnt >= HOLD_INITIAL_DELAY_MS) {
+			if (fwd_rep_cnt == 0) {
+				flags.nav_fwd = 1;
+				uint32_t delay = REP_DELAY_BASE_MS / (meas_no ? meas_no : 1);
+				if (delay < REP_DELAY_MIN_MS) delay = REP_DELAY_MIN_MS;
+				fwd_rep_cnt = delay;
+				} else {
+				fwd_rep_cnt--;
+			}
+		}
+		} else {
+		fwd_hold_cnt = 0;
+	}
+
+	/********** Назад (PC6) **********/
+	if (pressed_edge & BTN_BWD_MASK) {
+		flags.nav_bwd = 1;
+		bwd_hold_cnt = 0;
+		bwd_rep_cnt  = HOLD_INITIAL_DELAY_MS;
+	}
+	if (!(cur & BTN_BWD_MASK)) {
+		if (bwd_hold_cnt < UINT16_MAX) bwd_hold_cnt++;
+		if (bwd_hold_cnt >= HOLD_INITIAL_DELAY_MS) {
+			if (bwd_rep_cnt == 0) {
+				flags.nav_bwd = 1;
+				uint32_t delay = REP_DELAY_BASE_MS / (meas_no ? meas_no : 1);
+				if (delay < REP_DELAY_MIN_MS) delay = REP_DELAY_MIN_MS;
+				bwd_rep_cnt = delay;
+				} else {
+				bwd_rep_cnt--;
+			}
+		}
+		} else {
+		bwd_hold_cnt = 0;
+	}
+
+	/********** История (PC3) **********/
+	if (pressed_edge & (1<<PC3)) {
+		flags.history = 1;
+	}
+
+	/********** UART-дамп (PC7) **********/
+	if (pressed_edge & (1<<PC7)) {
+		flags.uart_dump = 1;
+	}
 
 	prev = cur;
 }
 
-/* --------------------------- Dump log to UART --------------------------- */
-static uint32_t last_sent_entry = 0; // Глобальная переменная для хранения позиции
+static uint32_t last_sent_entry = 0;
 
 static void uart_dump_log(void)
 {
 	uint32_t current_entry = 0;
-	sd_iter_reset(); // Начинаем с начала файла
+	sd_iter_reset(); 
 	
-	while (sd_read_line(+1, linebuf, sizeof linebuf) == 0) {
+	while (current_entry < meas_no) {
 		current_entry++;
-		
-		// Отправляем только новые записи
 		if(current_entry > last_sent_entry) {
+			sd_read_line_at(current_entry, linebuf, sizeof linebuf);
 			uart_puts(linebuf);
 			uart_putc('\n');
 		}
 	}
 	
-	// Обновляем позицию последней отправленной записи
 	if(current_entry > last_sent_entry) {
 		last_sent_entry = current_entry;
 	}
+	
+	sd_iter_to_end();
+	
 }
 
 static void uart_init(void)
@@ -154,7 +211,7 @@ static void uart_init(void)
 static void timer1_init(void)
 {
 	TCCR1B = (1<<WGM12) | (1<<CS12);      /* CTC, prescaler 256            */
-	OCR1A  = 4095;//31249;                       /* 1 Гц                          */
+	OCR1A  = 5128;//31249;                       /* 1 Гц                          */
 	TIMSK |= (1<<OCIE1A);                 /* разрешить прерывание Compare  */
 }
 
@@ -293,8 +350,8 @@ int main(void)
 
 			if (flags.nav_bwd && !flags.btn_lock) {
 				flags.nav_bwd = 0;
-				sd_iter_reset();
-				if (sd_read_line(+1, linebuf, sizeof linebuf) == 0) {
+				//sd_iter_reset();
+				if (sd_read_line(-1, linebuf, sizeof linebuf) == 0) {
 					char *endl = strchr(linebuf, '\n');
 					if(endl) *endl = 0;
 					nav_pos = 0;
@@ -311,13 +368,15 @@ int main(void)
 			flags.btn_lock  = 1;
 			sd_flush();
 			uart_dump_log();
-			sd_iter_reset();
 			lcd_mov_cursor(16);
-			if (sd_read_line(+1, linebuf, sizeof linebuf) == 0) {
-				nav_pos = 0;
-				lcd_disp_str((uint8_t *)linebuf);
-			}
-
+			sd_read_line_at(meas_no, linebuf, sizeof linebuf);
+			nav_pos = meas_no;
+			
+			char *endl = strchr(linebuf, '\n');
+			if(endl) *endl = 0;
+			lcd_mov_cursor(16);
+			lcd_disp_str((uint8_t *)linebuf);
+			lcd_disp_str((uint8_t*)"    ");
 			flags.btn_lock = 0;
 		}
 	}

@@ -9,6 +9,7 @@
 
 #include "sdcard.h"
 #include "spi.h"
+#include <avr/eeprom.h>
 #include <string.h>
 #define F_CPU 8000000UL
 #include <util/delay.h>
@@ -23,7 +24,7 @@ static uint8_t  sec_buf[512];            /* RAM?буфер сектора            */
 static uint8_t  card_sdhc   = 0;         /* 0†Ц†SDSC,†1†Ц†SDHC           */
 static uint32_t next_sector = 1;         /* куда писать следующую строку */
 static uint32_t it_sector;               /* курсор при чтении            */
-
+uint32_t EEMEM eeprom_next_sector;
 /* ====================================================================== */
 static uint8_t sd_cmd(uint8_t cmd, uint32_t arg, uint8_t crc)
 {
@@ -107,13 +108,14 @@ static uint8_t write_sector(uint32_t lba)
 /* ------------------------- Tail detector -------------------------------- */
 static void find_tail(void)
 {
-    uint32_t s = 1;
-    while (1) {
-        if (read_sector(s)) break;        /* ошибка чтени€†Ц хвост=1 */
-        if (sec_buf[0] == 0xFF) break;    /* пустой сектор ? хвост   */
-        ++s;
-    }
-    next_sector = s;
+   // uint32_t s = 1;
+   // while (1) {
+   //     if (read_sector(s)) break;        /* ошибка чтени€†Ц хвост=1 */
+   //     if (sec_buf[0] == 0xFF) break;    /* пустой сектор ? хвост   */
+   //     ++s;
+   // }
+   // next_sector = s;
+   next_sector = 1;
 }
 
 /* ====================================================================== */
@@ -141,7 +143,12 @@ void sd_init(void)
     }
 
     sd_deselect(); spi_x(0xFF);
-    find_tail();
+    uint32_t stored = eeprom_read_dword(&eeprom_next_sector);
+    if (stored >= 1 && stored <  0xFFFFFFFF) {
+	    next_sector = stored;
+	    } else {
+	    find_tail();
+    }
 }
 
 void sd_clear_log(uint16_t n_sectors)
@@ -163,7 +170,10 @@ uint8_t sd_write_line(const char *str)
     sec_buf[len] = '\n';
 
     uint8_t res = write_sector(next_sector);
-    if (res == 0) ++next_sector;
+    if (res == 0) {
+	    ++next_sector;
+	    eeprom_update_dword(&eeprom_next_sector, next_sector);
+    }
     return res;
 }
 
@@ -218,4 +228,9 @@ uint8_t sd_read_line_at(uint32_t line_num, char *dst, uint8_t dst_sz)
 
 	// копируем строку из сектора в dst (останавливаемс€ на '\n' или 0xFF)
 	return copy_line(dst, dst_sz);
+}
+
+void sd_iter_to_end(void)
+{
+	it_sector = next_sector;
 }
