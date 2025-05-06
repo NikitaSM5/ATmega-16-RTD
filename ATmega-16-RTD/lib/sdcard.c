@@ -205,3 +205,17 @@ uint8_t sd_read_line(int8_t dir, char *dst, uint8_t dst_sz)
 
     return copy_line(dst, dst_sz);
 }
+
+uint8_t sd_read_line_at(uint32_t line_num, char *dst, uint8_t dst_sz)
+{
+	// допустимый диапазон: [1, next_sector-1]
+	if (line_num < 1 || line_num >= next_sector)
+	return 1;
+
+	// читаем нужный сектор
+	if (read_sector(line_num))
+	return 2;
+
+	// копируем строку из сектора в dst (останавливаемся на '\n' или 0xFF)
+	return copy_line(dst, dst_sz);
+}

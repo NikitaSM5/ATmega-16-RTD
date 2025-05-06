@@ -32,13 +32,16 @@
 #define LED_MASK        (1<<PD7)
 
 /* ---------------------------- Флаги -------------------------------------- */
+/* ---------------------------- Флаги -------------------------------------- */
 struct {
 	uint8_t one_sec     :1;
 	uint8_t ten_sec     :1;
-	uint8_t nav_fwd     :1;    // запрос «вперёд»  от пользователя
-	uint8_t nav_bwd     :1;    // запрос «назад»   от пользователя
+	uint8_t nav_fwd     :1;    // запрос «вперёд» от пользователя
+	uint8_t nav_bwd     :1;    // запрос «назад» от пользователя
 	uint8_t uart_dump   :1;    // запрос дампа лога в UART
 	uint8_t btn_lock    :1;    // взаимоблокировка на время работы с SD
+	uint8_t history     :1;    // запрос переключения режима истории
+	uint8_t show_history:1;    // флаг активного режима истории
 } volatile flags;
 
 /* --------------------------- Глобальные ---------------------------------- */
@@ -46,7 +49,9 @@ static uint32_t meas_no  = 0;               // номер измерения
 static uint32_t nav_pos  = 0;               // текущая позиция во время навигации
 static struct pcf_time rtc_time;            // время из PCF8583
 volatile uint8_t disp_digits[4];            // буфер 7?seg
+static uint32_t cnt_uart = 0;
 static char linebuf[32];                    // общий рабочий буфер
+static char linebuf_hist[32];
 
 /* --------------------- Вспомогательные функции --------------------------- */
 static inline uint8_t bcd2dec(uint8_t v)  { return ((v >> 4) * 10) + (v & 0x0F); }
@@ -91,7 +96,7 @@ ISR(TIMER1_COMPA_vect)
 {
 	static uint8_t sec_cnt = 0;
 	flags.one_sec = 1;
-	if (++sec_cnt >= 1) { sec_cnt = 0; flags.ten_sec = 1; }
+	if (++sec_cnt >= 10) { sec_cnt = 0; flags.ten_sec = 1; }
 }
 
 /* ------------------- Таймер 0 – мультиплекс + кнопки --------------------- */
@@ -99,26 +104,40 @@ ISR(TIMER0_OVF_vect)
 {
 	sevseg_display_process(disp_digits);
 
-	/* —--- детектор фронта «нажатие» —---------------------------------- */
-	static uint8_t prev = BTN_FWD_MASK | BTN_BWD_MASK | (1<<PC7); // всё отпущено (1)
-	uint8_t cur       = PINC & (BTN_FWD_MASK | BTN_BWD_MASK | (1<<PC7));
-	uint8_t changed   = prev ^ cur;   /* биты, состояние которых изменилось */
-	uint8_t pressed   = changed & (~cur); /* именно «1 ? 0» (нажали)        */
+	static uint8_t prev = BTN_FWD_MASK | BTN_BWD_MASK | (1<<PC7) | (1<<PC3);
+	uint8_t cur = PINC & (BTN_FWD_MASK | BTN_BWD_MASK | (1<<PC7) | (1<<PC3));
+	uint8_t changed = prev ^ cur;
+	uint8_t pressed = changed & (~cur);
 
 	if (pressed & BTN_FWD_MASK)  flags.nav_fwd  = 1;
 	if (pressed & BTN_BWD_MASK)  flags.nav_bwd  = 1;
 	if (pressed & (1<<PC7))      flags.uart_dump = 1;
+	if (pressed & (1<<PC3))      flags.history = 1;
 
-	prev = cur;                  /* запомнили текущее для следующего тика  */
+	prev = cur;
 }
 
 /* --------------------------- Dump log to UART --------------------------- */
+static uint32_t last_sent_entry = 0; // Глобальная переменная для хранения позиции
+
 static void uart_dump_log(void)
 {
-	sd_iter_reset();
+	uint32_t current_entry = 0;
+	sd_iter_reset(); // Начинаем с начала файла
+	
 	while (sd_read_line(+1, linebuf, sizeof linebuf) == 0) {
-		uart_puts(linebuf);
-		uart_putc('\n');
+		current_entry++;
+		
+		// Отправляем только новые записи
+		if(current_entry > last_sent_entry) {
+			uart_puts(linebuf);
+			uart_putc('\n');
+		}
+	}
+	
+	// Обновляем позицию последней отправленной записи
+	if(current_entry > last_sent_entry) {
+		last_sent_entry = current_entry;
 	}
 }
 
@@ -135,7 +154,7 @@ static void uart_init(void)
 static void timer1_init(void)
 {
 	TCCR1B = (1<<WGM12) | (1<<CS12);      /* CTC, prescaler 256            */
-	OCR1A  = 31249;                       /* 1 Гц                          */
+	OCR1A  = 4095;//31249;                       /* 1 Гц                          */
 	TIMSK |= (1<<OCIE1A);                 /* разрешить прерывание Compare  */
 }
 
@@ -143,35 +162,61 @@ int main(void)
 {
 	float temperature = 0.0f;
 
-	 uart_init();
-	 sevseg_init();
-	 DDRD |= (1 << PD2)|(1 << PD3)|(1 << PD4)|(1 << PD5)|(1 << PD6)|(1 << PD7);
-	 
-	 lcd_init();
-	 max31865_init(0, 0);
-	 lcd_mov_cursor(16);
-	 sd_flush();
-	 
-	 DDRC &= ~(BTN_MASK|BTN_FWD_MASK | BTN_BWD_MASK);  /* входы?кнопки      */
-	 PORTC |=  (BTN_MASK|BTN_FWD_MASK | BTN_BWD_MASK); /* pull?up           */
-	 DDRC &= ~(1<<PC7);
-	 PORTC |= (1 << PC7);
-	 /* Timer0: уже используется библиотекой sevseg для мультиплексации */
-	 TCCR0 = (1<<CS01) | (1<<CS00);     /* prescaler 64, ~1.024 мс overflow */
-	 TIMSK |= (1<<TOIE0);
-	 
-	 timer1_init();                      /* 1 Гц системный «тик»            */
-	 sd_iter_reset();                    /* позиция чтения логфайла */
-	 
-	 twi_init();
-	 sei();                              /* глобально разрешить IRQ         */
-	 pcf_init();
+	uart_init();
+	sevseg_init();
+	DDRD |= (1 << PD2)|(1 << PD3)|(1 << PD4)|(1 << PD5)|(1 << PD6)|(1 << PD7);
+	
+	lcd_init();
+	lcd_disp_str((uint8_t*) "1");
+	max31865_init(0, 0);
+	lcd_disp_str((uint8_t*) "2");
+	lcd_mov_cursor(16);
+	sd_flush();
+	
+	DDRC &= ~(BTN_MASK|BTN_FWD_MASK | BTN_BWD_MASK);  /* входы?кнопки      */
+	PORTC |=  (BTN_MASK|BTN_FWD_MASK | BTN_BWD_MASK); /* pull?up           */
+	DDRC &= ~(1<<PC7);
+	PORTC |= (1 << PC7);
+	/* Timer0: уже используется библиотекой sevseg для мультиплексации */
+	TCCR0 = (1<<CS01) | (1<<CS00);     /* prescaler 64, ~1.024 мс overflow */
+	TIMSK |= (1<<TOIE0);
+	
+	timer1_init();                      /* 1 Гц системный «тик»            */
+	sd_iter_reset();                    /* позиция чтения логфайла */
+	
+	twi_init();
+	sei();                              /* глобально разрешить IRQ         */
+	pcf_init();
 
-	 meas_no = sd_get_entry_count();
+	meas_no = sd_get_entry_count();
 
 
 	/* --- главный цикл -------------------------------------------------- */
 	while (1) {
+		
+		
+		if (flags.history && !flags.btn_lock) {
+			flags.history = 0;
+			flags.show_history = !flags.show_history;
+			
+			if (flags.show_history) {
+				lcd_mov_cursor(16);
+				lcd_disp_str((uint8_t *)linebuf_hist);
+				lcd_disp_str((uint8_t*)"    "); // Очистка остатков
+				} else {
+				sd_iter_reset();
+				if (sd_read_line(+1, linebuf, sizeof linebuf) == 0) {
+					// Обрезаем возможный перевод строки
+					char *endl = strchr(linebuf, '\n');
+					if(endl) *endl = 0;
+					
+					lcd_mov_cursor(16);
+					lcd_disp_str((uint8_t *)linebuf);
+					lcd_disp_str((uint8_t*)"    "); // Очистка хвоста
+				}
+			}
+		}
+		
 		/* --------- ежесекундные задачи -------------------------------- */
 		if (flags.one_sec) {
 			flags.one_sec = 0;
@@ -180,32 +225,23 @@ int main(void)
 			while (twi_status != TWI_STATUS_RX_COMPLETE);
 			twi_status = TWI_STATUS_READY;
 
-			if ((PINC & BTN_MASK) == 0) {
-				// показываем часы (ММ:СС)
-				uint8_t sec = bcd2dec(rtc_time.seconds);
-				uint8_t min = bcd2dec(rtc_time.minutes);
-				uint8_t d[4] = { sec % 10, sec / 10, min % 10, min / 10 };
-				ATOMIC_BLOCK(ATOMIC_RESTORESTATE) { for (uint8_t i=0;i<4;i++) disp_digits[i]=d[i]; }
-				sevseg_set_dot(2);
-				} else {
-				// показываем температуру (X.Y)
-				temperature = max31865_read_temperature();
-				temperature_to_digits_tenth(temperature);
-			}
+			// показываем температуру (X.Y)
+			temperature = max31865_read_temperature();
+			temperature_to_digits_tenth(temperature);
 
 			/* обновление первой строки LCD (время + кол?во записей) */
 			char tstr[10], cnt[6];
 			time2str(&rtc_time, tstr);
-			sprintf(cnt, "%lu", meas_no  == 0? 0 : meas_no - 1);
+			sprintf(cnt, "%lu", meas_no );
 
 			lcd_mov_cursor(0);
 			lcd_disp_str((uint8_t *)tstr);
-			lcd_mov_cursor(12);
+			lcd_mov_cursor(10);
 			lcd_disp_str((uint8_t *)"#");
 			lcd_disp_str((uint8_t *)cnt);
 		}
 
-		/* ---------- каждые 10 с – измерение + лог ---------------------- */
+		/* ---------- каждые 10 с – измерение + лог ---------------------- */
 		if (flags.ten_sec) {
 			flags.ten_sec = 0;
 			if (!flags.btn_lock) {
@@ -213,42 +249,59 @@ int main(void)
 
 				int16_t t100 = (int16_t)(temperature * 100.0f + 0.5f);
 				++meas_no;
-				sprintf(linebuf, "%lu %02u:%02u,%+d.%02u\n",
+				sprintf(linebuf, "%lu %02u:%02u,%+d.%02u", // Убрали \n в конце
 				meas_no,
 				bcd2dec(rtc_time.hours & 0x3F),
 				bcd2dec(rtc_time.minutes),
 				t100/100,
 				abs(t100)%100);
+				
+				// Копируем с очисткой буфера
+				memset(linebuf_hist, 0, sizeof(linebuf_hist)); // Очищаем буфер
+				strncpy(linebuf_hist, linebuf, sizeof(linebuf_hist)-1); // Безопасное копирование
+				
+				strcat(linebuf, "\n"); // Добавляем перевод строки для SD-карты
 				sd_write_line(linebuf);
 				sd_flush();
+
+				if (flags.show_history) {
+					lcd_mov_cursor(16);
+					lcd_disp_str((uint8_t *)linebuf_hist);
+					lcd_disp_str((uint8_t*)"    "); // Очистка хвоста
+				}
 
 				flags.btn_lock = 0;
 			}
 		}
 
 		/* --------------- навигация по логу ----------------------------- */
-		if (flags.nav_fwd && !flags.btn_lock) {
-			flags.nav_fwd = 0;
-			sd_flush();
-			if (nav_pos < (meas_no - 1)) {
-				++nav_pos;
-				if (sd_read_line(+1, linebuf, sizeof linebuf) == 0) {
-					lcd_mov_cursor(16);
-					lcd_disp_str((uint8_t *)linebuf);
+		if (!flags.show_history) {
+			if (flags.nav_fwd && !flags.btn_lock) {
+				flags.nav_fwd = 0;
+				if (nav_pos < meas_no) {
+					++nav_pos;
+					if (sd_read_line(+1, linebuf, sizeof linebuf) == 0) {
+						char *endl = strchr(linebuf, '\n');
+						if(endl) *endl = 0;
+						
+						lcd_mov_cursor(16);
+						lcd_disp_str((uint8_t *)linebuf);
+						lcd_disp_str((uint8_t*)"    ");
+					}
 				}
 			}
-		}
 
-		if (flags.nav_bwd && !flags.btn_lock) {
-			flags.nav_bwd = 0;
-			sd_iter_reset();
-			sd_flush();
-			if (sd_read_line(+1, linebuf, sizeof linebuf) == 0) {
-				nav_pos = 0;
-				lcd_send_cmd(1<<LCD_CLR);
-				_delay_ms(2);
-				lcd_mov_cursor(16);
-				lcd_disp_str((uint8_t *)linebuf);
+			if (flags.nav_bwd && !flags.btn_lock) {
+				flags.nav_bwd = 0;
+				sd_iter_reset();
+				if (sd_read_line(+1, linebuf, sizeof linebuf) == 0) {
+					char *endl = strchr(linebuf, '\n');
+					if(endl) *endl = 0;
+					nav_pos = 0;
+					lcd_mov_cursor(16);
+					lcd_disp_str((uint8_t *)linebuf);
+					lcd_disp_str((uint8_t*)"    ");
+				}
 			}
 		}
 
@@ -259,10 +312,6 @@ int main(void)
 			sd_flush();
 			uart_dump_log();
 			sd_iter_reset();
-
-			lcd_send_cmd(1<<LCD_CLR);
-			_delay_ms(2);
-			lcd_disp_str((uint8_t *)"//UART//");
 			lcd_mov_cursor(16);
 			if (sd_read_line(+1, linebuf, sizeof linebuf) == 0) {
 				nav_pos = 0;
@@ -272,14 +321,6 @@ int main(void)
 			flags.btn_lock = 0;
 		}
 	}
+	
 }
 
-/* ------------------------------------------------------------------------ */
-// Изменения в сравнении с исходным кодом:
-//   • ISR(TIMER0_OVF_vect) теперь **только** сканирует кнопки и дисплей.
-//   • Все обращения к SD, LCD и MAX31865 перенесены в main() в атомарные
-//     участки, защищённые флагом btn_lock.
-//   • Добавлены флаги nav_fwd/nav_bwd/uart_dump вместо прямых действий
-//     внутри прерывания.
-//   • Пересчитаны интервалы: 10?с обработчик теперь будет срабатывать точно
-//     раз в 10 сек (счётчик до 10, а не до 5?2).

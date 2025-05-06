@@ -29,7 +29,7 @@
 #define MAX31865_CFG_FILT50HZ         (1<<0)  /* 1=50?Hz filter, 0=60?Hz */
 
 /* ===== Conversion Constants ===== */
-#define MAX31865_RREF         430.0f   /* Reference resistor (?) */
+#define MAX31865_RREF         425.0f   /* Reference resistor (?) */
 #define MAX31865_R0           100.0f   /* RTD resistance @ 0?°C (PT100) */
 #define MAX31865_A            3.9083e-3f
 #define MAX31865_B           -5.775e-7f

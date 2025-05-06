@@ -40,7 +40,7 @@ void max31865_init(uint8_t three_wire, uint8_t filter50Hz)
 
 	spi_init(); /* in spi.c */
 	sd_init();
-	//sd_clear_log(512);
+	sd_clear_log(512);
 
 	uint8_t cfg = 0;
 	if (three_wire) cfg |= MAX31865_CFG_3WIRE;

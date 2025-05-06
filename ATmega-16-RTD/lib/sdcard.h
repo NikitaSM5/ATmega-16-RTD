@@ -15,5 +15,6 @@ void sd_iter_reset(void);
 uint8_t sd_read_line(int8_t dir, char *dst, uint8_t dst_size);
 void sd_flush(void);
 uint32_t sd_get_entry_count(void);
+uint8_t sd_read_line_at(uint32_t line_num, char *dst, uint8_t dst_sz);
 
 #endif
