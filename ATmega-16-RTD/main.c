@@ -40,7 +40,7 @@ static volatile uint16_t bwd_hold_cnt, bwd_rep_cnt;
 static volatile uint32_t  ms_ticks = 0;         // миллисекунды от старта
 static volatile uint8_t   nav_end_event = 0;    // «двойной клик» вперёд ? конец
 static volatile uint8_t   nav_start_event = 0;  // «двойной клик» назад ? начало
-
+static volatile uint32_t last_sent_meas = 0;
 
 /* ---------------------------- Флаги -------------------------------------- */
 /* ---------------------------- Флаги -------------------------------------- */
@@ -129,14 +129,17 @@ static void uart_puts(const char *s) { while(*s) uart_putc(*s++); }
 ISR(TIMER1_COMPA_vect)
 {
 	static uint8_t sec_cnt = 0;
-	flags.one_sec = 1;
-	if (++sec_cnt >= 1) { sec_cnt = 0; flags.ten_sec = 1; }
+	flags.one_sec = 1; 
+	if (++sec_cnt >= 2) { sec_cnt = 0; flags.ten_sec = 1;}
 }
 
 /* ------------------- Таймер 0 – мультиплекс + кнопки --------------------- */
 ISR(TIMER0_OVF_vect)
 {
 	// 1) Обновляем мультиплекс 7-segment
+	if(flags.uart_dump == 1)
+	PORTA = 0x00;
+	else
 	sevseg_display_process(disp_digits);
 
 	// 2) Приближённый миллисекундный счётчик (~1.024 ms на 8 MHz/64)
@@ -244,23 +247,61 @@ static uint32_t last_sent_entry = 0;
 static void uart_dump_log(void)
 {
 	uint32_t current_entry = 0;
-	sd_iter_reset(); 
-	
+
+	/* 0. Сброс итератора SD?карты и очистка экрана                       */
+	sd_iter_reset();
+
+	/* 1. Подготовка прогресс?бара — заполняем строку пробелами            */
+	lcd_mov_cursor(0);
+	for (uint8_t i = 0; i < 16; i++) lcd_send_char(' ');
+
+	/* 2. Переменная, чтобы не перерисовывать уже показанные блоки         */
+	static uint8_t shown_blocks = 0;
+
+	/* 3. Переходим во вторую строку для вывода счётчика                   */
+	lcd_mov_cursor(16);
+	static char current_msg[16];
+
+	/* 4. Основной цикл отправки строк                                     */
 	while (current_entry < meas_no) {
-		current_entry++;
-		if(current_entry > last_sent_entry) {
+		++current_entry;
+
+		if (current_entry > last_sent_entry) {
+
+			/* 4.1. Обновляем счётчик «текущая / всего»                    */
+			sprintf(current_msg, "%lu/%lu", current_entry, meas_no);
+			lcd_disp_str((uint8_t *)current_msg);
+			lcd_mov_cursor(16);   /* вернуть курсор, чтобы переписывать */
+
+			/* 4.2. Читаем строку из SD и отправляем в UART                */
 			sd_read_line_at(current_entry, linebuf, sizeof linebuf);
 			uart_puts(linebuf);
 			uart_putc('\n');
+
+			/* 4.3. Обновляем прогресс?бар                                 */
+			uint8_t blocks = (uint32_t)current_entry * 16 / meas_no; /* 0?16 */
+			if (blocks > shown_blocks) {
+				lcd_mov_cursor(shown_blocks);          /* в начало незаполнённой зоны */
+				for (uint8_t i = shown_blocks; i < blocks; i++) lcd_send_char(0xFF);
+				shown_blocks = blocks;
+			}
 		}
 	}
-	
-	if(current_entry > last_sent_entry) {
+
+	/* 5. Запоминаем, что уже отправили                                   */
+	if (current_entry > last_sent_entry) {
 		last_sent_entry = current_entry;
+		last_sent_meas += last_sent_entry;
 	}
-	
+
+	/* 6. Сдвигаем SD?итератор в конец файла                               */
 	sd_iter_to_end();
-	
+
+	/* 7. (Опционально) очищаем прогресс?бар, если хотим вернуть дисплей   */
+	lcd_mov_cursor(0);
+	//for (uint8_t i = 0; i < 16; i++) lcd_putc(' ');
+
+	shown_blocks = 0;            /* готово для следующего дампа */
 }
 
 static void uart_init(void)
@@ -317,9 +358,13 @@ int main(void)
 	while (1) {
 		
 		
-		if (flags.history && !flags.btn_lock) {
+		if (flags.history && !flags.btn_lock)
+		{
 			flags.history = 0;
 			flags.show_history = !flags.show_history;
+			
+			nav_end_event   = 0;
+			nav_start_event = 0;
 			
 			if (flags.show_history) {
 				lcd_mov_cursor(16);
@@ -327,15 +372,16 @@ int main(void)
 				lcd_disp_str((uint8_t*)"    "); // Очистка остатков
 				} else {
 				sd_iter_reset();
-				if (sd_read_line(+1, linebuf, sizeof linebuf) == 0) {
-					// Обрезаем возможный перевод строки
-					char *endl = strchr(linebuf, '\n');
-					if(endl) *endl = 0;
-					
-					lcd_mov_cursor(16);
-					lcd_disp_str((uint8_t *)linebuf);
-					lcd_disp_str((uint8_t*)"    "); // Очистка хвоста
-				}
+				nav_pos = meas_no;
+				sd_read_line_at(meas_no, linebuf, sizeof linebuf);
+				// Обрезаем возможный перевод строки
+				char *endl = strchr(linebuf, '\n');
+				if(endl) *endl = 0;
+				
+				lcd_mov_cursor(16);
+				lcd_disp_str((uint8_t *)linebuf);
+				lcd_disp_str((uint8_t*)"    "); // Очистка хвоста
+				
 			}
 		}
 		
@@ -343,7 +389,8 @@ int main(void)
 		
 		
 		/* --------- ежесекундные задачи -------------------------------- */
-		if (flags.one_sec) {
+		if (flags.one_sec)
+		{
 			flags.one_sec = 0;
 
 			pcf_read_time(&rtc_time);
@@ -357,7 +404,7 @@ int main(void)
 			/* обновление первой строки LCD (время + кол?во записей) */
 			char tstr[10], cnt[6];
 			time2str(&rtc_time, tstr);
-			sprintf(cnt, "%lu", meas_no );
+			sprintf(cnt, "%lu", meas_no + last_sent_meas);
 
 			lcd_mov_cursor(0);
 			lcd_disp_str((uint8_t *)tstr);
@@ -367,7 +414,8 @@ int main(void)
 		}
 
 		/* ---------- каждые 10 с – измерение + лог ---------------------- */
-		if (flags.ten_sec) {
+		if (flags.ten_sec)
+		{
 			flags.ten_sec = 0;
 			if (!flags.btn_lock) {
 				flags.btn_lock = 1;
@@ -375,7 +423,7 @@ int main(void)
 				int16_t t100 = (int16_t)(temperature * 100.0f + 0.5f);
 				++meas_no;
 				sprintf(linebuf, "%lu %02u:%02u,%+d.%02u", // Убрали \n в конце
-				meas_no,
+				meas_no + last_sent_meas,
 				bcd2dec(rtc_time.hours & 0x3F),
 				bcd2dec(rtc_time.minutes),
 				t100/100,
@@ -401,7 +449,8 @@ int main(void)
 		}
 
 
-		if (!flags.show_history) {
+		if (!flags.show_history)
+		{
 			// ——— обработка двойных кликов ———
 			if (nav_end_event && !flags.btn_lock) {
 				nav_end_event = 0;
@@ -418,70 +467,71 @@ int main(void)
 				flags.nav_bwd = 0;      // сбросим одиночный «назад»
 				flags.btn_lock = 0;
 			}
-
-			if (!flags.show_history) {
-				// обработка двойных кликов прежняя …
-				// …
-
-				// ——— шаговая навигация вперёд/назад чисто по nav_pos ———
-				if (flags.nav_fwd && !flags.btn_lock) {
-					flags.nav_fwd = 0;
-					if (nav_pos < meas_no) {
-						nav_pos++;
-						// сразу читаем конкретную строку
-						if (sd_read_line_at(nav_pos, linebuf, sizeof linebuf) == 0) {
-							char *e = strchr(linebuf, '\n');
-							if (e) *e = 0;
-							lcd_mov_cursor(16);
-							lcd_disp_str((uint8_t*)linebuf);
-							lcd_disp_str((uint8_t*)"    ");
-						}
+		}
+		
+		if (!flags.show_history)
+		{
+			if (flags.nav_fwd && !flags.btn_lock) {
+				flags.nav_fwd = 0;
+				if (nav_pos < meas_no) {
+					nav_pos++;
+					// сразу читаем конкретную строку
+					if (sd_read_line_at(nav_pos, linebuf, sizeof linebuf) == 0) {
+						char *e = strchr(linebuf, '\n');
+						if (e) *e = 0;
+						lcd_mov_cursor(16);
+						lcd_disp_str((uint8_t*)linebuf);
+						lcd_disp_str((uint8_t*)"    ");
 					}
 				}
+			}
 
-				if (flags.nav_bwd && !flags.btn_lock) {
-					flags.nav_bwd = 0;
-					if (nav_pos > 1) {
-						nav_pos--;
-						if (sd_read_line_at(nav_pos, linebuf, sizeof linebuf) == 0) {
-							char *e = strchr(linebuf, '\n');
-							if (e) *e = 0;
-							lcd_mov_cursor(16);
-							lcd_disp_str((uint8_t*)linebuf);
-							lcd_disp_str((uint8_t*)"    ");
-						}
+			if (flags.nav_bwd && !flags.btn_lock) {
+				flags.nav_bwd = 0;
+				if (nav_pos > 1) {
+					nav_pos--;
+					if (sd_read_line_at(nav_pos, linebuf, sizeof linebuf) == 0) {
+						char *e = strchr(linebuf, '\n');
+						if (e) *e = 0;
+						lcd_mov_cursor(16);
+						lcd_disp_str((uint8_t*)linebuf);
+						lcd_disp_str((uint8_t*)"    ");
 					}
 				}
 			}
 		}
+		
+		
+		if (flags.uart_dump && !flags.btn_lock)
+		{
+			
+			flags.btn_lock  = 1;
 
-		        if (flags.uart_dump && !flags.btn_lock) {
-			        flags.uart_dump = 0;
-			        flags.btn_lock  = 1;
+			sd_flush();
+			lcd_send_cmd(1 << LCD_CLR);
+			_delay_ms(2);
+			lcd_disp_str((uint8_t*) "UART...");
+			
+			uart_dump_log();
 
-			        sd_flush();
-			        uart_dump_log();
+			sd_flush();
+			sd_erase_sector(0);
+			sd_clear_log(1);
+			meas_no = 0;              
+			nav_pos = 0;             
+			last_sent_entry = 0;      
+			// обновим отображение счётчика записей на LCD
+			lcd_send_cmd(1 << LCD_CLR);
+			_delay_ms(2);
+			lcd_mov_cursor(10);
+			lcd_disp_str((uint8_t*)"#0   ");
+			// === КОНЕЦ НОВОГО БЛОКА ===
 
-			        // === НОВЫЙ БЛОК ОЧИСТКИ ===
-			        // полностью очищаем SD-карту и сбрасываем все счётчики
-			        sd_flush();                // убедимся, что всё записано/сброшено
-			       // sd_erase_all();            // функция форматирования/стирания всех секторов
-				    sd_erase_sector(0);
-					sd_clear_log(1);
-			        //meas_no = 0;               // обнуляем номер текущей записи
-			        nav_pos = 0;               // обнуляем позицию навигации
-			        last_sent_entry = 0;       // обнуляем маркер последнего отправленного
-			        // обновим отображение счётчика записей на LCD
-					lcd_send_cmd(1 << LCD_CLR);
-					_delay_ms(2);
-			        lcd_mov_cursor(10);
-			        lcd_disp_str((uint8_t*)"#0   ");
-			        // === КОНЕЦ НОВОГО БЛОКА ===
-
-			        // для пользователя можно показать пустой лог (или оставить текущее отображение)
-			        flags.btn_lock = 0;
-		        }
+			// для пользователя можно показать пустой лог (или оставить текущее отображение)
+			flags.btn_lock = 0;
+			flags.uart_dump = 0;
 		}
-	
+		
+	}
 }
 
