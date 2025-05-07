@@ -246,68 +246,67 @@ static uint32_t last_sent_entry = 0;
 
 static void uart_dump_log(void)
 {
-	uint32_t current_entry = 0;
+    uint32_t current_entry = 0;
 
-	/* 0. Сброс итератора SD?карты и очистка экрана                       */
-	sd_iter_reset();
+    /* 0. Сброс итератора SD?карты и очистка 1?й строки                   */
+    sd_iter_reset();
+    lcd_mov_cursor(0);
+    for (uint8_t i = 0; i < 16; i++) lcd_send_char(' ');
 
-	/* 1. Подготовка прогресс?бара — заполняем строку пробелами            */
-	lcd_mov_cursor(0);
-	for (uint8_t i = 0; i < 16; i++) lcd_send_char(' ');
+    /* 1. Текущая длина заполненной части бара                            */
+    uint8_t shown_blocks = 0;
 
-	/* 2. Переменная, чтобы не перерисовывать уже показанные блоки         */
-	static uint8_t shown_blocks = 0;
+    /* 2. Буфер для счётчика                                              */
+    static char current_msg[16];
 
-	/* 3. Переходим во вторую строку для вывода счётчика                   */
-	lcd_mov_cursor(16);
-	static char current_msg[16];
+    /* 3. Основной цикл отправки строк                                    */
+    while (current_entry < meas_no) {
+        ++current_entry;
 
-	/* 4. Основной цикл отправки строк                                     */
-	while (current_entry < meas_no) {
-		++current_entry;
+        if (current_entry > last_sent_entry) {
 
-		if (current_entry > last_sent_entry) {
+            /* 3.1. ?? ПРОГРЕСС?БАР ???????????????????????????????????? */
+            uint8_t blocks = (uint32_t)current_entry * 16 / meas_no; /* 0…16 */
+            if (blocks > shown_blocks) {
+                lcd_mov_cursor(shown_blocks);          /* первый ещё пустой блок  */
+                for (uint8_t i = shown_blocks; i < blocks; i++) lcd_send_char(0xFF);
+                shown_blocks = blocks;
+            }
+            /* Курсор ушёл в 1?ю строку ? вернём его на 2?ю:            */
+            lcd_mov_cursor(16);                        /* адрес 0?го символа 2?й строки */
 
-			/* 4.1. Обновляем счётчик «текущая / всего»                    */
-			sprintf(current_msg, "%lu/%lu", current_entry, meas_no);
-			lcd_disp_str((uint8_t *)current_msg);
-			lcd_mov_cursor(16);   /* вернуть курсор, чтобы переписывать */
+            /* 3.2. ?? СЧЁТЧИК  «n / N»  (2?я строка) ????????????????? */
+            sprintf(current_msg, "%lu/%lu", current_entry, meas_no);
+            lcd_disp_str((uint8_t *)current_msg);
+            /* Оставляем курсор в начале 2?й строки для следующего цикла */
+            lcd_mov_cursor(16);
 
-			/* 4.2. Читаем строку из SD и отправляем в UART                */
-			sd_read_line_at(current_entry, linebuf, sizeof linebuf);
-			uart_puts(linebuf);
-			uart_putc('\n');
+            /* 3.3. ?? Передаём строку по UART ????????????????????????? */
+            sd_read_line_at(current_entry, linebuf, sizeof linebuf);
+            uart_puts(linebuf);
+            uart_putc('\n');
+        }
+    }
 
-			/* 4.3. Обновляем прогресс?бар                                 */
-			uint8_t blocks = (uint32_t)current_entry * 16 / meas_no; /* 0?16 */
-			if (blocks > shown_blocks) {
-				lcd_mov_cursor(shown_blocks);          /* в начало незаполнённой зоны */
-				for (uint8_t i = shown_blocks; i < blocks; i++) lcd_send_char(0xFF);
-				shown_blocks = blocks;
-			}
-		}
-	}
+    /* 4. Обновляем внутренние счётчики                                   */
+    if (current_entry > last_sent_entry) {
+        last_sent_meas += current_entry - last_sent_entry;
+        last_sent_entry = current_entry;
+    }
 
-	/* 5. Запоминаем, что уже отправили                                   */
-	if (current_entry > last_sent_entry) {
-		last_sent_entry = current_entry;
-		last_sent_meas += last_sent_entry;
-	}
-
-	/* 6. Сдвигаем SD?итератор в конец файла                               */
-	sd_iter_to_end();
-
-	/* 7. (Опционально) очищаем прогресс?бар, если хотим вернуть дисплей   */
-	lcd_mov_cursor(0);
-	//for (uint8_t i = 0; i < 16; i++) lcd_putc(' ');
-
-	shown_blocks = 0;            /* готово для следующего дампа */
+    /* 5. Перемещаем SD?итератор в конец файла                            */
+    sd_iter_to_end();
+	_delay_ms(500);
+    /* 6. (Опционально) очищаем прогресс?бар — раскомментируйте, если надо
+    lcd_mov_cursor(0);
+    for (uint8_t i = 0; i < 16; i++) lcd_putc(' ');
+    */
 }
 
 static void uart_init(void)
 {
 	UCSRA |= (1<<U2X);
-	UBRRL = 51; //19.2
+	UBRRL = 17; //19.2
 	UCSRC |= (1 << URSEL) | (1 << UCSZ0) | (1 << UCSZ1);
 	UCSRB |= (1 << RXCIE) | (1 << RXEN) | (1 << TXEN);
 }
