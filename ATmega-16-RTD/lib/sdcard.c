@@ -234,3 +234,11 @@ void sd_iter_to_end(void)
 {
 	it_sector = next_sector;
 }
+
+uint8_t sd_erase_sector(uint32_t lba)
+{
+	// заполняем буфер сектора 0xFF
+	memset(sec_buf, 0xFF, sizeof(sec_buf));
+	// записываем буфер в сектор lba
+	return write_sector(lba);
+}

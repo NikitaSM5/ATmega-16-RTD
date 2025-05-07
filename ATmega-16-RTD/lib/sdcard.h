@@ -17,5 +17,6 @@ void sd_flush(void);
 uint32_t sd_get_entry_count(void);
 uint8_t sd_read_line_at(uint32_t line_num, char *dst, uint8_t dst_sz);
 void sd_iter_to_end(void);
+uint8_t sd_erase_sector(uint32_t lba);
 
 #endif
