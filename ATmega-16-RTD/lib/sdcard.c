@@ -46,7 +46,7 @@ static uint8_t wait_token(uint8_t token, uint16_t tout_ms)
 {
     while (tout_ms--) {
         if (spi_x(0xFF) == token) return 0;
-        _delay_ms(1);
+       _delay_us(200);
     }
     return 1;
 }
@@ -55,7 +55,7 @@ static uint8_t wait_ready(uint16_t tout_ms)
 {
     while (tout_ms--) {
         if (spi_x(0xFF) == 0xFF) return 0;
-        _delay_ms(1);
+       _delay_us(200);
     }
     return 1;
 }
@@ -242,3 +242,4 @@ uint8_t sd_erase_sector(uint32_t lba)
 	// записываем буфер в сектор lba
 	return write_sector(lba);
 }
+

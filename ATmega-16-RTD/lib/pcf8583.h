@@ -12,12 +12,16 @@
 #define PCF_SEC   0x02  // Регистр секунд
 #define PCF_MIN   0x03  // Регистр минут
 #define PCF_HOURS 0x04  // Регистр часов
+#define PCF_DAY   0x05          // Год(2 бита) + день
+#define PCF_MONTH 0x06          // Неделя(3 бита) + месяц
 
 struct pcf_time
 {
-    uint8_t seconds;
-    uint8_t minutes;
-	uint8_t hours;
+    uint8_t seconds;            // 0x02
+    uint8_t minutes;            // 0x03
+    uint8_t hours;              // 0x04
+    uint8_t day;                // 0x05  YY(1-0) + DD(5-0)
+    uint8_t month;              // 0x06  WD(7-5) + MM(4-0)
 };
 
 /* Функция инициализации часов реального времени PCF8583 */
