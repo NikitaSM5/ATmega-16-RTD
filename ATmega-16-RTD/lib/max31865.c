@@ -1,5 +1,6 @@
 #include "max31865.h"
 #include "spi.h"
+#include "sdcard.h"
 
 static inline void cs_low(void)  { MAX31865_CS_PORT &= ~(1<<MAX31865_CS_PIN); }
 static inline void cs_high(void) { MAX31865_CS_PORT |=  (1<<MAX31865_CS_PIN); }

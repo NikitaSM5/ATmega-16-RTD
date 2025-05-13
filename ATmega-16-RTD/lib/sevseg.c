@@ -103,7 +103,7 @@ static uint8_t inc_number_digit(void)
  * \param digits указатель на 4-х байтное двоично-десятичное число
  * \param num_dig номер отображаемого разряда
  */
-static void display_digit(const uint8_t *digits, uint8_t num_dig)
+static void display_digit(const volatile uint8_t *digits, uint8_t num_dig)
 {
 	DATA_PORT = 0x00;
 	CTRL_PORT &= ~CTRL_PIN_MASK;
@@ -142,7 +142,7 @@ static void display_digit(const uint8_t *digits, uint8_t num_dig)
  * 
  * \param digits указатель на 4-х байтное двоично-десятичное число
  */
-void sevseg_display_process(const uint8_t *digits)
+void sevseg_display_process(const volatile uint8_t *digits)
 {
     uint8_t num_dig = inc_number_digit();
     display_digit(digits, num_dig);
